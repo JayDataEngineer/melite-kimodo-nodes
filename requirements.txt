@@ -1,0 +1,12 @@
+# melite-kimodo-nodes — deps BEYOND the image base env.
+#
+# The kimodo package itself is NOT pip-declared here: the image no longer
+# bakes it (the old full Dockerfile `pip install -e vendor/kimodo` is
+# gone) — declare the package in the owning plugin's nodes/extensions.yaml
+# `pip:` list, or rely on the dev box sys.path bootstrap in __init__.py
+# (repo vendor/kimodo through the custom_nodes symlink). Everything else
+# kimodo needs (torch, transformers, peft, omegaconf, einops, tqdm, numpy,
+# scipy, huggingface_hub) already ships in the base env; hydra-core is the
+# one gap that broke the import chain with "No module named 'kimodo'"
+# mid-run.
+hydra-core>=1.3
