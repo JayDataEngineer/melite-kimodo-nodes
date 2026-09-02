@@ -269,12 +269,28 @@ def _apply_network_patches() -> None:
     if _network_patches_applied:
         return
 
+    # 2026-09-03 (inference.cpp migration round 2): PYTHONPATH=/opt makes
+    # "import kimodo" bind to /opt/kimodo (the vendored REPO ROOT) as a
+    # namespace package -> "cannot import name 'load_model' from 'kimodo'
+    # (unknown location)". Put the real package dir FIRST so the package
+    # at /opt/kimodo/kimodo wins over the /opt shadow.
+    import sys as _sys
+    if "/opt/kimodo" not in _sys.path:
+        _sys.path.insert(0, "/opt/kimodo")
+
     # HF cache location: the container default HF_HOME=/tmp/huggingface is
     # nearly empty. The real Kimodo text-encoder cache (LLM2Vec, Llama-3)
     # lives on the shared models volume at /mnt/data/models/cache/huggingface/.
-    _HF_CACHE = "/mnt/data/models/cache/huggingface"
+    # 2026-09-03 (inference.cpp migration round 2): the REAL hub cache with
+    # complete snapshots (meta-llama base 15G + McGill adapters) lives at
+    # /mnt/data/huggingface — /mnt/data/models/cache/huggingface holds only
+    # 12K stubs, and pointing at it broke offline base-model resolution.
+    # 2026-09-03 round 3: the serving container does NOT see the host's
+    # /mnt/data/huggingface (no bind mount). The hub cache now lives IN the
+    # shared volume as hardlinks (zero extra bytes): /mnt/data/models/hf-hub.
+    _HF_CACHE = "/mnt/data/models/hf-home"
     os.environ["HF_HOME"] = _HF_CACHE
-    os.environ["HF_HUB_CACHE"] = _HF_CACHE
+    os.environ["HF_HUB_CACHE"] = "/mnt/data/models/hf-hub"
 
     # Kimodo checkpoint dir: vendor load_model() resolves checkpoint folder
     # via CHECKPOINT_DIR. Kimodo-SOMA-RP-v1.1/ has model.safetensors +
@@ -307,7 +323,7 @@ def _apply_network_patches() -> None:
     # /mnt/data/models/cache/huggingface/ — the Kimodo text encoder's base
     # model, loaded from this cache when TEXT_ENCODERS_DIR resolves the
     # adapter locally.
-    os.environ.setdefault("HUGGINGFACE_CACHE_DIR", "/mnt/data/models/cache/huggingface")
+    os.environ.setdefault("HUGGINGFACE_CACHE_DIR", "/mnt/data/models/hf-hub")
 
     try:
         from pathlib import Path
@@ -318,7 +334,10 @@ def _apply_network_patches() -> None:
         # bypassing the gateway's download utility). 2026-08-13 fix.
         hf_const.HF_HUB_OFFLINE = os.environ.get("HF_HUB_OFFLINE", "1") == "1"
         # Override already-loaded cache paths (env was read at import time)
-        hf_const.HF_HUB_CACHE = Path(_HF_CACHE)
+        # 2026-09-03 round 3: the hub cache DIR is hf-hub (hardlinked into
+        # the shared volume), NOT the HF_HOME root — the old override pointed
+        # both constants at hf-home and broke offline resolution.
+        hf_const.HF_HUB_CACHE = Path("/mnt/data/models/hf-hub")
         hf_const.HF_HOME = Path(_HF_CACHE)
     except (ImportError, AttributeError):
         pass
