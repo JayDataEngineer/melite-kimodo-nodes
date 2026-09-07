@@ -1,5 +1,9 @@
 # melite-kimodo-nodes — deps BEYOND the image base env.
 #
+# ONE install unit for the humanoid family (2026-09-07 merge: the
+# anny-estimator pack folded in — shared torch/melite_model_base
+# spine, one registry entry, one nodes.yaml row shape).
+#
 # The kimodo package itself is NOT pip-declared here: the image no longer
 # bakes it (the old full Dockerfile `pip install -e vendor/kimodo` is
 # gone) — declare the package in the owning plugin's nodes/extensions.yaml
@@ -10,3 +14,16 @@
 # one gap that broke the import chain with "No module named 'kimodo'"
 # mid-run.
 hydra-core>=1.3
+# Anny engines (were the anny-estimator pack's rail — same pin the
+# owning 3d lane declares in its nodes.yaml `pip:`; ComfyUI-Manager
+# reads this file on install):
+multihmr2 @ git+https://github.com/naver/multi-hmr2.git@f066532d096034700e5ba8b7b1ca655729d3ea6e
+trimesh
+# render=True overlays additionally need multihmr2's [render] extra
+# (pyrender + matplotlib + scipy) — uncomment when enabling renders:
+# pyrender
+# matplotlib
+# scipy
+#
+# Anny-Fit optimization is OUT-OF-PROCESS (own checkout + venv via
+# ANNYFIT_SRC / ANNYFIT_PYTHON) — its deps are deliberately NOT here.

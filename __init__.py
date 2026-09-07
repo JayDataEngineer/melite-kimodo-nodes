@@ -85,7 +85,17 @@ if _KIMODO_SOURCE is None:
 else:
     log.info("[melite-kimodo] kimodo source: %s", _KIMODO_SOURCE)
 
-from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .nodes import (  # noqa: E402 — after the kimodo source bootstrap above
+    NODE_CLASS_MAPPINGS as _KIMODO_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _KIMODO_DISPLAY,
+)
+from .nodes_anny import (  # noqa: E402 — the merged anny-estimator family
+    NODE_CLASS_MAPPINGS as _ANNY_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _ANNY_DISPLAY,
+)
+
+NODE_CLASS_MAPPINGS = {**_KIMODO_MAPPINGS, **_ANNY_MAPPINGS}
+NODE_DISPLAY_NAME_MAPPINGS = {**_KIMODO_DISPLAY, **_ANNY_DISPLAY}
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 # No WEB_DIRECTORY — native widgets only; no web assets are shipped for this pack.
