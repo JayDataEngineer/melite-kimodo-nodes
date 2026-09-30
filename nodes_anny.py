@@ -814,12 +814,32 @@ class AnnyFitOptimize:
 # Registration
 # ════════════════════════════════════════════════════════════════════════════
 _COMMERCIAL_ROOT_ENV = "ANNY_COMMERCIAL_ROOT"
-# managed-boot convention: ComfyUI's output dir is <ws>/data/temp, so
-# the workspace is parents[1]. BYO deployments keep their own layout
-# — set ANNY_COMMERCIAL_ROOT (the refusal below says so).
-_COMMERCIAL_ROOT_DEFAULT = str(
-    Path(folder_paths.get_output_directory()).resolve().parents[1]
-    / "data" / "runtime" / "anny-commercial") if folder_paths else ""
+_COMMERCIAL_ROOT_REL = ("data", "runtime", "anny-commercial")
+# THE ROOT SEARCH. The managed boot's convention put ComfyUI's output
+# dir at <ws>/data/temp, so parents[1] was the workspace — a BYO
+# deployment (ComfyUI living at <repo>/data/runtime/comfyui) lands
+# that one level too deep and the join doubles into
+# data/runtime/data/runtime. So: walk UP from the output directory and
+# take the first ancestor that actually holds the runtime. The env
+# var still wins (the refusal below names it), and a machine with no
+# runtime anywhere falls through to the managed-boot guess so the
+# refusal quotes the conventional path.
+def _default_commercial_root() -> str:
+    if not folder_paths:
+        return ""
+    try:
+        start = Path(folder_paths.get_output_directory()).resolve()
+    except Exception:
+        return ""
+    managed = start.parents[1] / "data" / "runtime" / "anny-commercial"
+    for parent in start.parents:
+        candidate = parent.joinpath(*_COMMERCIAL_ROOT_REL)
+        if candidate.is_dir():
+            return str(candidate)
+    return str(managed)
+
+
+_COMMERCIAL_ROOT_DEFAULT = _default_commercial_root()
 
 
 def _commercial_root() -> Path:
