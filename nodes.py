@@ -494,8 +494,11 @@ class KimodoTextToPose:
                 "seed": ("INT", {"default": 42, "min": 0, "max": 2**32 - 1}),
             },
             "optional": {
+                # upstream Kimodo documents 10 s as the maximum
+                # generated motion duration PER PROMPT; a longer clip
+                # is motion_prompts segments, each <= 10 s
                 "duration_sec": ("FLOAT", {
-                    "default": DEFAULT_DURATION_SEC, "min": 0.1, "max": 60.0}),
+                    "default": DEFAULT_DURATION_SEC, "min": 0.1, "max": 10.0}),
                 "diffusion_steps": ("INT", {
                     "default": DEFAULT_DIFFUSION_STEPS, "min": 1, "max": 1000}),
                 "num_samples": ("INT", {
