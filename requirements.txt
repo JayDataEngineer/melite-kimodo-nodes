@@ -27,3 +27,11 @@ trimesh
 #
 # Anny-Fit optimization is OUT-OF-PROCESS (own checkout + venv via
 # ANNYFIT_SRC / ANNYFIT_PYTHON) — its deps are deliberately NOT here.
+# kimodo — the pack's namesake dependency, the SAME pin shape as
+# multihmr2 above: the vendored /opt/kimodo tree was the only source
+# the bootstrap knew (both candidates died on a fresh install — the
+# 2026-10-13 audit's blocker); the pip leg now installs the exact
+# upstream commit the estate ran (nv-tlabs@54257dd, its 1.0.0 tag
+# lineage). The __init__ bootstrap's `import kimodo` wins first, so
+# the pip leg satisfies it and the legacy candidates stay dormant.
+kimodo @ git+https://github.com/nv-tlabs/kimodo.git@54257dd

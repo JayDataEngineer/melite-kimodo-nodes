@@ -1,0 +1,9 @@
+[project]
+name = "melite-kimodo-nodes"
+version = "0.1.0"
+description = "Melite Kimodo (text-to-pose, multihmr2 + kimodo) — a Melite first-party ComfyUI extension pack"
+
+# Version display + package identity for ComfyUI-Manager (it reads
+# this for its version column). Runtime dependencies live in
+# requirements.txt — the file Manager pip-installs on the git-url
+# door; duplicating them here would drift (audit, 2026-10-13).
