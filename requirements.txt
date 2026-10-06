@@ -19,6 +19,11 @@ hydra-core>=1.3
 # reads this file on install):
 multihmr2 @ git+https://github.com/naver/multi-hmr2.git@f066532d096034700e5ba8b7b1ca655729d3ea6e
 trimesh
+# the UV seat (2026-10-13): upstream's saver writes position-only
+# GLBs by construction; the anny body export unwraps REAL island UVs
+# with xatlas — downstream (coat detail maps, fit seating) refuses a
+# position-only body. Loud refusal when absent, never a planar bolt-on.
+xatlas
 # render=True overlays additionally need multihmr2's [render] extra
 # (pyrender + matplotlib + scipy) — uncomment when enabling renders:
 # pyrender

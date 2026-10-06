@@ -81,6 +81,54 @@ _ANNYFIT_SRC_DEFAULT = "/opt/anny-fit"
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# The UV seat (2026-10-13, the position-only export cure): upstream's
+# saver writes POSITION-only GLBs by construction (trimesh export of
+# the regressed template, no TEXCOORD_0), and downstream refuses such
+# a body — the coat has nowhere to land a detail map, the fit has no
+# seat. The unwrap is REAL chart formation (xatlas: islands from the
+# bake's own geometry), never a planar projection bolted on at the
+# export; a mesh that arrives WITH UVs rides them through untouched.
+# ════════════════════════════════════════════════════════════════════════════
+def _unwrap_uv(mesh) -> "tuple":
+    """One mesh → (vertices, faces, uv) with real island UVs.
+
+    Carries existing TEXCOORD_0 through verbatim; otherwise unwraps
+    with xatlas (chart + pack — the maintained unwrapper, a declared
+    pack dependency). Loud refusal, never a silent planar fallback.
+
+    Returns the REMESHED vertex/face arrays xatlas produced (unwrap
+    may split seam vertices) together with the uv per NEW vertex.
+    """
+    import numpy as np
+
+    existing = getattr(getattr(mesh, "visual", None), "uv", None)
+    if existing is not None and len(existing) == len(mesh.vertices):
+        return (
+            np.asarray(mesh.vertices, dtype=np.float32),
+            np.asarray(mesh.faces, dtype=np.uint32),
+            np.asarray(existing, dtype=np.float32),
+        )
+    try:
+        import xatlas  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "xatlas is required to unwrap the anny body (the coat "
+            "refuses a position-only body): pip install xatlas into "
+            "the serving venv (a declared melite-kimodo-nodes "
+            "requirement). Original error: " + str(e)
+        ) from e
+    atlas = xatlas.Atlas()
+    atlas.add_mesh(
+        np.asarray(mesh.vertices, dtype=np.float32),
+        np.asarray(mesh.faces, dtype=np.uint32),
+    )
+    atlas.generate()
+    vmapping, faces, uv = atlas[0]
+    verts = np.asarray(mesh.vertices, dtype=np.float32)[vmapping]
+    return verts, np.asarray(faces, dtype=np.uint32), np.asarray(uv, dtype=np.float32)
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Shared output-directory convention (autoremesher pattern: counter under
 # the ComfyUI output dir, derived from filename_prefix)
 # ════════════════════════════════════════════════════════════════════════════
@@ -514,8 +562,20 @@ class AnnyGroundBody:
             f = np.asarray(g.faces, dtype=np.int64)
             faces.append(f + offset)
             offset += len(g.vertices)
+        # THE UV CARRY (the position-only cure): merge each geom's
+        # TEXCOORD_0 alongside the vertices when EVERY geom ships one
+        # (upstream's saver ships none — the unwrap below answers).
+        uvs = [getattr(getattr(g, "visual", None), "uv", None) for g in geoms]
+        merged_uv = None
+        if all(u is not None and len(u) == len(g.vertices)
+               for u, g in zip(uvs, geoms)):
+            merged_uv = np.vstack([np.asarray(u, dtype=np.float64)
+                                   for u in uvs])
+        visual = (None if merged_uv is None
+                  else trimesh.visual.TextureVisuals(uv=merged_uv))
         mesh = trimesh.Trimesh(
-            vertices=verts, faces=np.vstack(faces), process=False)
+            vertices=verts, faces=np.vstack(faces), process=False,
+            visual=visual)
 
         # OpenCV camera space -> world: y-down becomes y-up (π about Z,
         # right-handed), then drop the camera translation (re-anchor).
@@ -536,8 +596,17 @@ class AnnyGroundBody:
         out_dir = Path(folder_paths.get_output_directory()) / "anny"
         out_dir.mkdir(parents=True, exist_ok=True)
         out = out_dir / ("anny_grounded_body_%06d.glb" % int(time.time()))
-        trimesh.Trimesh(vertices=v, faces=mesh.faces,
-                        process=False).export(str(out))
+        # THE UNWRAP SEAT: real island UVs on the FINAL grounded body
+        # (xatlas charts, or the merged TEXCOORD_0 carried verbatim) —
+        # the export never writes a position-only body again.
+        grounded = trimesh.Trimesh(vertices=v, faces=mesh.faces,
+                                   process=False,
+                                   visual=mesh.visual)
+        uv_verts, uv_faces, uv = _unwrap_uv(grounded)
+        trimesh.Trimesh(
+            vertices=uv_verts, faces=uv_faces, process=False,
+            visual=trimesh.visual.TextureVisuals(uv=uv),
+        ).export(str(out))
         logger.info("[AnnyGroundBody] %s -> %s (extent %s)",
                     p, out, extent.round(3))
         return {
