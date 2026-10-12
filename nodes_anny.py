@@ -318,7 +318,7 @@ class MultiHMR2ImageToAnny:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("out_dir", "anny_params_path", "mesh_paths")
     FUNCTION = "estimate"
-    CATEGORY = "TechNoir/Anny"
+    CATEGORY = "Melite/Anny"
     OUTPUT_NODE = True
 
     def estimate(
@@ -478,7 +478,7 @@ class AnnySelectPerson:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("glb_path",)
     FUNCTION = "select"
-    CATEGORY = "TechNoir/Anny"
+    CATEGORY = "Melite/Anny"
 
     @staticmethod
     def select(mesh_paths: str, index: int):
@@ -535,7 +535,7 @@ class AnnyGroundBody:
     RETURN_NAMES = ("glb_path",)
     FUNCTION = "ground"
     OUTPUT_NODE = True          # terminal artifact: must execute
-    CATEGORY = "TechNoir/Anny"
+    CATEGORY = "Melite/Anny"
 
     @staticmethod
     def ground(glb_path: str):
@@ -803,7 +803,7 @@ class AnnyFitOptimize:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("out_dir", "anny_params_paths", "render_paths")
     FUNCTION = "optimize"
-    CATEGORY = "TechNoir/Anny"
+    CATEGORY = "Melite/Anny"
     OUTPUT_NODE = True
 
     def optimize(
@@ -882,8 +882,8 @@ class AnnyFitOptimize:
 # ════════════════════════════════════════════════════════════════════════════
 # Registration
 # ════════════════════════════════════════════════════════════════════════════
-_COMMERCIAL_ROOT_ENV = "ANNY_COMMERCIAL_ROOT"
-_COMMERCIAL_ROOT_REL = ("data", "runtime", "anny-commercial")
+_ESTIMATOR_ROOT_ENV = "ANNY_ESTIMATOR_ROOT"
+_ESTIMATOR_ROOT_REL = ("data", "runtime", "anny-estimator")
 # THE ROOT SEARCH. The managed boot's convention put ComfyUI's output
 # dir at <ws>/data/temp, so parents[1] was the workspace — a BYO
 # deployment (ComfyUI living at <repo>/data/runtime/comfyui) lands
@@ -893,44 +893,44 @@ _COMMERCIAL_ROOT_REL = ("data", "runtime", "anny-commercial")
 # var still wins (the refusal below names it), and a machine with no
 # runtime anywhere falls through to the managed-boot guess so the
 # refusal quotes the conventional path.
-def _default_commercial_root() -> str:
+def _default_estimator_root() -> str:
     if not folder_paths:
         return ""
     try:
         start = Path(folder_paths.get_output_directory()).resolve()
     except Exception:
         return ""
-    managed = start.parents[1] / "data" / "runtime" / "anny-commercial"
+    managed = start.parents[1] / "data" / "runtime" / "anny-estimator"
     for parent in start.parents:
-        candidate = parent.joinpath(*_COMMERCIAL_ROOT_REL)
+        candidate = parent.joinpath(*_ESTIMATOR_ROOT_REL)
         if candidate.is_dir():
             return str(candidate)
     return str(managed)
 
 
-_COMMERCIAL_ROOT_DEFAULT = _default_commercial_root()
+_ESTIMATOR_ROOT_DEFAULT = _default_estimator_root()
 
 
-def _commercial_root() -> Path:
-    """The provisioned commercial-chain runtime (venv + SOMA-X + worker).
+def _estimator_root() -> Path:
+    """The provisioned estimator-chain runtime (venv + SOMA-X + worker).
 
-    data/runtime/anny-commercial/ is materialized by the estate
+    data/runtime/anny-estimator/ is materialized by the estate
     provisioner (torch cu130 — the system nvcc 13.x cannot build
     against the serving venv's cu128 stack, so the chain rides its
     own venv as a subprocess, the AnnyFitOptimize pattern).
     """
-    src = Path(os.environ.get(_COMMERCIAL_ROOT_ENV, _COMMERCIAL_ROOT_DEFAULT))
-    expected = [src / "commercial_chain.py",
+    src = Path(os.environ.get(_ESTIMATOR_ROOT_ENV, _ESTIMATOR_ROOT_DEFAULT))
+    expected = [src / "estimator_chain.py",
                 src / ".venv" / "bin" / "python",
                 src / "SOMA-X" / "tools" / "mhr2soma.py"]
     missing = [str(p) for p in expected if not p.exists()]
     if missing:
         raise RuntimeError(
-            "anny-commercial runtime not found at " + str(src) + ". "
-            "Provision it: uv run python tools/provision.py commercial "
+            "anny-estimator runtime not found at " + str(src) + ". "
+            "Provision it: pnpm run provision -- estimator "
             "(SAM 3D Body venv + SOMA-X checkout — see "
-            "docs/design/commercial-estimator-chain.md). Missing: "
-            + ", ".join(missing) + ". Or point " + _COMMERCIAL_ROOT_ENV
+            "dev_docs/design/estimator-chain.md). Missing: "
+            + ", ".join(missing) + ". Or point " + _ESTIMATOR_ROOT_ENV
             + " at an existing runtime."
         )
     return src
@@ -939,7 +939,7 @@ def _commercial_root() -> Path:
 class Sam3dBodyImageToAnny:
     """COMMERCIAL chain: photo → SAM 3D Body → MHR → SOMA → Anny → GLB.
 
-    Licensing (design record docs/design/commercial-estimator-chain.md,
+    Licensing (design record docs/design/estimator-chain.md,
     operator order 2026-09-05): SAM 3D Body rides the Meta SAM License
     — ACCEPTED for commercial games use ("I CAN SELL IT, I just have
     to remove it if they ask"); MHR + SOMA-X + anny are Apache 2.0.
@@ -947,9 +947,9 @@ class Sam3dBodyImageToAnny:
     those stay in the research lane).
 
     Out-of-process: the heavy stack (torch cu130 + detectron2) rides
-    the provisioned anny-commercial venv, spawned per run with
+    the provisioned anny-estimator venv, spawned per run with
     PROGRESS streaming; every stage failure surfaces its full stderr.
-    Artifacts in the run dir: commercial_body.glb (grounded Y-up
+    Artifacts in the run dir: estimator_body.glb (grounded Y-up
     bind-pose body fitted to the photo's person), anny_params.npz
     (phenotype + local-change rows — card/slider vocabulary),
     soma.npz, sam3d.parquet.
@@ -981,12 +981,12 @@ class Sam3dBodyImageToAnny:
     RETURN_NAMES = ("glb_path", "anny_params_path")
     FUNCTION = "estimate"
     OUTPUT_NODE = True
-    CATEGORY = "TechNoir/Anny"
+    CATEGORY = "Melite/Anny"
 
     @staticmethod
     def estimate(image, image_path="", person_index=0):
-        root = _commercial_root()
-        run_dir = _next_run_dir("commercial_anny")
+        root = _estimator_root()
+        run_dir = _next_run_dir("estimator_anny")
 
         src = (image_path or "").strip()
         if src:
@@ -1008,7 +1008,7 @@ class Sam3dBodyImageToAnny:
 
         proc = subprocess.run(
             [str(root / ".venv" / "bin" / "python"),
-             str(root / "commercial_chain.py"), str(src), str(run_dir)],
+             str(root / "estimator_chain.py"), str(src), str(run_dir)],
             capture_output=True, text=True,
             # the cu130 nvidia libs are NOT on the loader path by
             # default — torch's nvrtc JIT (warp kernels in mhr2soma)
@@ -1022,12 +1022,12 @@ class Sam3dBodyImageToAnny:
             cwd=str(root))
         for line in proc.stdout.splitlines():
             if line.startswith("PROGRESS"):
-                logger.info("[commercial] %s", line)
+                logger.info("[estimator] %s", line)
         if proc.returncode != 0:
             raise RuntimeError(
-                f"Sam3dBodyImageToAnny: commercial chain failed (rc="
+                f"Sam3dBodyImageToAnny: estimator chain failed (rc="
                 f"{proc.returncode}):\n{proc.stderr[-2000:]}")
-        glb = run_dir / "commercial_body.glb"
+        glb = run_dir / "estimator_body.glb"
         npz = run_dir / "anny_params.npz"
         if not glb.is_file() or not npz.is_file():
             raise RuntimeError(
@@ -1036,7 +1036,7 @@ class Sam3dBodyImageToAnny:
                 f"{run_dir} retains intermediates for audit.")
         # Recipe harvest (2026-09-06): the chain's anny_preset.json
         # (estimated dialect — phenotype[6] + scale[139], written by
-        # commercial_chain step 4b) rides the ui surface beside the
+        # estimator_chain step 4b) rides the ui surface beside the
         # GLB so the gateway harvest downloads it as a run artifact.
         # The studio seeds its sculpt scratchpad from it (the blue
         # figure wakes up AS the estimated body); the bake path is
@@ -1052,18 +1052,25 @@ class Sam3dBodyImageToAnny:
 
 
 class AnnyParamsToGlb:
-    """Preset params → grounded Anny body GLB (stroke 3: the preset-load
-    verb's flow runs this out-of-process in the provisioned
-    anny-commercial runtime — the Sam3dBodyImageToAnny pattern: the
-    serving venv has anny but NOT soma/SOMA-X, and the estimated
-    dialect re-instantiates through the SAME AnnySimplified path the
-    commercial worker bakes).
+    """Preset params → grounded Anny body GLB, baked IN-PROCESS.
+
+    THE COMFYUI-NODE LAW (operator, 2026-10-24): the bake is anny
+    geometry — anny + torch + trimesh + numpy, all declared in the
+    pack's requirements.txt and installed by ComfyUI-Manager with the
+    pack. No subprocess, no runtime root, no env var, no path walk:
+    an npm consumer installs the pack and the node works. The old
+    out-of-process spawn (a separate python-3.11 venv with a
+    hardcoded LD_LIBRARY_PATH, hunted via ANNY_ESTIMATOR_ROOT and
+    ancestor walks) ran a function this venv already had — deleted.
 
     params_json is the canonical node dialect (CharacterPreset.
     canonical_json): authored {11 phenotype + named morphs} or
     estimated {6 + 139 verbatim estimator output}. Shape-checked
     HERE (counts + dialect — the estate row validated at
     construction; a hand-posted body gets the same gate, loud).
+    The estimated dialect additionally needs the estimator stack's
+    soma package (declared by the SAM-body estimator seat, NOT by
+    this card path); its absence refuses loud, naming the seat.
     """
 
     @classmethod
@@ -1082,7 +1089,7 @@ class AnnyParamsToGlb:
     RETURN_NAMES = ("glb_path",)
     FUNCTION = "bake"
     OUTPUT_NODE = True          # terminal artifact: must execute
-    CATEGORY = "TechNoir/Anny"
+    CATEGORY = "Melite/Anny"
 
     @staticmethod
     def bake(params_json: str):
@@ -1114,37 +1121,89 @@ class AnnyParamsToGlb:
             raise RuntimeError(
                 "AnnyParamsToGlb: unknown dialect %r (want "
                 "authored|estimated)" % (dialect,))
-        root = _commercial_root()
-        script = root / "bake_params.py"
-        if not script.is_file():
+        # IN-PROCESS BAKE (the ComfyUI-node law, 2026-10-24): anny +
+        # torch + trimesh + numpy, all requirements.txt rows the
+        # Manager door installs with the pack. The body below is the
+        # former bake_params.py main() ported verbatim (bit-exact
+        # body: full-model forward → -90° about X → feet grounded,
+        # origin-centered — the live-proven signs, preserved).
+        import numpy as np
+        import torch
+        import trimesh
+        import anny
+
+        if dialect == "authored":
+            logger.info("[preset-bake] PROGRESS instantiate authored preset")
+            m = anny.create_fullbody_model(
+                all_phenotypes=True, local_changes=True,
+                remove_unattached_vertices=True)
+            labels = list(m.local_change_labels)
+            vec = torch.zeros(1, len(labels))
+            for name, value in doc["local_changes"].items():
+                if name not in labels:
+                    raise RuntimeError(
+                        "AnnyParamsToGlb: unknown morph %r (not in the "
+                        "installed anny local_change_labels — refusing, "
+                        "never a silent skip)" % (name,))
+                try:
+                    fval = float(value)
+                except (TypeError, ValueError):
+                    raise RuntimeError(
+                        "AnnyParamsToGlb: morph %r value %r is not a "
+                        "number" % (name, value))
+                vec[0, labels.index(name)] = fval
+            out_model = m(
+                phenotype_kwargs=torch.tensor([ph]).float(),
+                local_changes_kwargs=vec.float())
+            verts = np.asarray(
+                out_model["vertices"].detach())[0].astype(np.float64)
+            faces = np.asarray(
+                m.faces.numpy() if hasattr(m.faces, "numpy") else m.faces,
+                dtype=np.int64)
+        else:
+            try:
+                from soma.body.identity_model import AnnySimplified
+            except ImportError as e:
+                raise RuntimeError(
+                    "AnnyParamsToGlb: the estimated dialect needs the "
+                    "estimator stack's soma package (the SAM-body "
+                    "estimator seat declares it; this card's slider "
+                    "path never does) — import failed: %s" % (e,))
+            logger.info("[preset-bake] PROGRESS instantiate estimated params")
+            m = anny.create_fullbody_model(
+                all_phenotypes=True, local_changes=True,
+                remove_unattached_vertices=True)
+            wrapper = AnnySimplified(m, torch.device("cpu"))
+            verts = wrapper(
+                phenotype_kwargs=torch.tensor([ph]).float(),
+                local_changes_kwargs=torch.tensor([doc["scale"]]).float())
+            verts = np.asarray(verts.detach())[0].astype(np.float64)
+            faces = np.asarray(
+                m.faces.numpy() if hasattr(m.faces, "numpy") else m.faces,
+                dtype=np.int64)
+
+        # the former worker's bake, verbatim: -90° about X (native
+        # Z-up head-+Z → Y-up), feet grounded, origin-centered. The
+        # estate bake.py's +90° is a live-proven sign bug — do NOT
+        # copy it.
+        rot = trimesh.transformations.rotation_matrix(
+            -np.pi / 2, [1, 0, 0])
+        verts = trimesh.transform_points(verts, rot)
+        verts[:, 1] -= verts[:, 1].min()
+        verts[:, 0] -= (verts[:, 0].max() + verts[:, 0].min()) / 2
+        verts[:, 2] -= (verts[:, 2].max() + verts[:, 2].min()) / 2
+        extent = (verts.max(0) - verts.min(0)).round(3).tolist()
+        if extent[1] < 0.5 * max(extent[0], extent[2]):
             raise RuntimeError(
-                "AnnyParamsToGlb: bake_params.py missing in the runtime "
-                "(re-provision: uv run python tools/provision.py "
-                "commercial).")
+                "AnnyParamsToGlb: baked mesh is not plausibly a "
+                "standing figure (extent %s)" % (extent,))
         run_dir = _next_run_dir("preset_bake")
-        params_path = run_dir / "params.json"
-        params_path.write_text(params_json, encoding="utf-8")
         out = run_dir / "preset_body.glb"
-        proc = subprocess.run(
-            [str(root / ".venv" / "bin" / "python"),
-             str(script), str(params_path), str(out)],
-            capture_output=True, text=True,
-            env={**os.environ,
-                 "LD_LIBRARY_PATH": str(
-                     root / ".venv" / "lib" / "python3.11"
-                     / "site-packages" / "nvidia" / "cu13" / "lib")},
-            cwd=str(root))
-        for line in proc.stdout.splitlines():
-            if line.startswith("PROGRESS"):
-                logger.info("[preset-bake] %s", line)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "AnnyParamsToGlb: bake failed (rc="
-                f"{proc.returncode}):\n{proc.stderr[-2000:]}")
-        if not out.is_file():
-            raise RuntimeError(
-                "AnnyParamsToGlb: bake exited 0 but no GLB — run dir "
-                f"{run_dir} retains intermediates for audit.")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        trimesh.Trimesh(vertices=verts, faces=faces,
+                        process=False).export(str(out))
+        logger.info("[preset-bake] PROGRESS glb %s extent %s",
+                    out.name, extent)
         return {
             "result": (str(out),),
             "ui": {"three_model": [_ui_file(out)]},
@@ -1165,6 +1224,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "AnnySelectPerson": "🧍→1 Select Person · estimator → one GLB",
     "AnnyGroundBody": "🧍↓ Ground Body · camera-space → world",
     "AnnyFitOptimize": "🎯 Anny-Fit · camera-space refine",
-    "Sam3dBodyImageToAnny": "🧍💰 SAM 3D Body · commercial chain → Anny",
+    "Sam3dBodyImageToAnny": "🧍 SAM 3D Body · estimator → Anny",
     "AnnyParamsToGlb": "🧍📋 Params → Body · preset instantiate",
 }

@@ -19,6 +19,13 @@ hydra-core>=1.3
 # reads this file on install):
 multihmr2 @ git+https://github.com/naver/multi-hmr2.git@f066532d096034700e5ba8b7b1ca655729d3ea6e
 trimesh
+# THE PARAMETRIC BAKE (2026-10-24, the ComfyUI-node law): the anny
+# body itself — AnnyParamsToGlb bakes IN-PROCESS (anny + torch +
+# trimesh + numpy; torch/numpy ship in the base env, trimesh above).
+# This row is what makes an npm/Manager install WORK with zero
+# provisioning steps: the pack installs, the deps land, the card
+# runs. Same pin the estate's commercial provisioner installed.
+anny==0.6.0
 # the UV seat (2026-10-13): upstream's saver writes position-only
 # GLBs by construction; the anny body export unwraps REAL island UVs
 # with xatlas — downstream (coat detail maps, fit seating) refuses a

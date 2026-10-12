@@ -396,7 +396,7 @@ class KimodoLoader:
     RETURN_TYPES = ("KIMODO_MODEL",)
     RETURN_NAMES = ("model",)
     FUNCTION = "load"
-    CATEGORY = "TechNoir/Kimodo"
+    CATEGORY = "Melite/Kimodo"
 
     def load(self, model_name: str):
         import comfy.model_management as mm
@@ -548,7 +548,7 @@ class KimodoTextToPose:
     RETURN_TYPES = ("STRING", "KIMODO_RESULT")
     RETURN_NAMES = ("npz_path", "result")
     FUNCTION = "generate"
-    CATEGORY = "TechNoir/Kimodo"
+    CATEGORY = "Melite/Kimodo"
     OUTPUT_NODE = True
 
     def generate(
