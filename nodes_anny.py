@@ -949,8 +949,9 @@ class Sam3dBodyImageToAnny:
     Out-of-process: the heavy stack (torch cu130 + detectron2) rides
     the provisioned anny-estimator venv, spawned per run with
     PROGRESS streaming; every stage failure surfaces its full stderr.
-    Artifacts in the run dir: estimator_body.glb (grounded Y-up
-    bind-pose body fitted to the photo's person), anny_params.npz
+    Artifacts in the run dir: commercial_body.glb (grounded Y-up
+    bind-pose body fitted to the photo's person — the chain's own
+    name for its final artifact, estimator_chain.py:202), anny_params.npz
     (phenotype + local-change rows — card/slider vocabulary),
     soma.npz, sam3d.parquet.
     """
@@ -1027,7 +1028,12 @@ class Sam3dBodyImageToAnny:
             raise RuntimeError(
                 f"Sam3dBodyImageToAnny: estimator chain failed (rc="
                 f"{proc.returncode}):\n{proc.stderr[-2000:]}")
-        glb = run_dir / "estimator_body.glb"
+        # THE CHAIN'S OWN NAME (the 2026-10-23 drift burn: the node
+        # pinned estimator_body.glb while the chain's final stage had
+        # long written commercial_body.glb — every clean run died
+        # "artifacts are missing" AFTER the chain exited 0). The
+        # chain is upstream's; the node reads what the chain writes.
+        glb = run_dir / "commercial_body.glb"
         npz = run_dir / "anny_params.npz"
         if not glb.is_file() or not npz.is_file():
             raise RuntimeError(
