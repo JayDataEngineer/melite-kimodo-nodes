@@ -15,7 +15,8 @@ dependencies = [
     "trimesh",
     "anny==0.6.0",
     "xatlas",
-    "kimodo @ git+https://github.com/nv-tlabs/kimodo.git@54257dd"
+    "kimodo @ git+https://github.com/nv-tlabs/kimodo.git@54257dd",
+    "melite-model-base @ git+https://github.com/JayDataEngineer/melite-model-base.git@b18214cd772c10d248636f0a4a73eeb7cb53b231"
 ]
 
 [project.urls]
