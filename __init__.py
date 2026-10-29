@@ -8,79 +8,39 @@ Two nodes:
   KimodoLoader    — loads the diffusion model into VRAM (~17GB)
   KimodoTextToPose — runs text-to-pose inference, saves NPZ, returns result
 
-KIMODO SOURCE RESOLUTION (2026-08-15, "No module named 'kimodo'"):
-nodes.py imports kimodo lazily (``from kimodo import load_model`` inside
-KimodoLoader.load), so the pack REGISTERED fine and the failure only
-surfaced mid-run, killing the whole pipeline with
-"ComfyUI workflow failed: No module named 'kimodo'". The retired full
-image used to pip-install the vendored source (``COPY vendor/kimodo/
-/opt/kimodo/`` + ``pip install -e ".[all]"``) — that bake is GONE; the
-package must come from a pip install or the owning plugin's lane
-declaration. The DEV box symlinks this pack straight out of the repo and
-nothing ever installed kimodo into its venv. This bootstrap closes that
-gap the melite-step1x-nodes way: before registering the nodes, make the
-vendored source importable — preferring an already-instolved kimodo (pip
-install wins), then the repo checkout this pack was symlinked from
-(realpath escapes the custom_nodes symlink to the repo's vendor/kimodo),
-then the legacy /opt/kimodo layout.
+KIMODO SOURCE RESOLUTION (2026-08-15, "No module named 'kimodo'";
+converged 2026-11-12, audit 019 C6 — the cold-clone pack law): the
+pack ships ONE install door, the pip leg in requirements.txt
+(``kimodo @ git+https://github.com/nv-tlabs/kimodo.git@54257dd``).
+The repo-layout sys.path bootstrap that used to live here (vendor/
+kimodo through the custom_nodes symlink, then the retired /opt/kimodo
+image layout) is DELETED: it could only ever fire on a dev box, and a
+cold Manager install rode the pip leg anyway. nodes.py imports kimodo
+lazily (``from kimodo import load_model`` inside KimodoLoader.load),
+so the pack registers fine either way; an unimportable kimodo lands
+at KimodoLoader.load with the breadcrumb below in the log.
 
-requirements.txt declares the one dependency the image base env
-does not already carry (hydra-core — kimodo's config instantiate()).
+requirements.txt declares the dependencies beyond the image base env
+(hydra-core — kimodo's config instantiate(); the kimodo pip leg;
+anny + multihmr2 + trimesh + xatlas for the folded-in estimator).
 """
 from __future__ import annotations
 
 import logging
-import os
-import sys
 
 log = logging.getLogger("melite-kimodo")
 
-# ── sys.path bootstrap (must happen before nodes.py's lazy kimodo imports) ──
-_CANDIDATES = [
-    # Dev: this pack is symlinked from <repo>/custom_nodes/melite-kimodo-nodes
-    # → realpath resolves through the /opt/ComfyUI/custom_nodes symlink to
-    # the REPO's live vendor tree (three levels up: ext dir → custom_nodes
-    # → repo root). Ordered FIRST so dev iterates on the checkout, not a
-    # stale copy.
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
-        "vendor", "kimodo",
-    ),
-    # Legacy layout from the retired full image (it COPY'd vendor/kimodo
-    # here); kept as the last-resort fallback for older installs.
-    "/opt/kimodo",
-]
-
 try:
-    import kimodo  # noqa: F401 — already resolvable (pip install / -e)
+    import kimodo  # noqa: F401 — the requirements.txt pip leg owns this
     _KIMODO_SOURCE = "installed"
-except ImportError:
-    _KIMODO_SOURCE = None
-    for _p in _CANDIDATES:
-        # A valid source dir carries the package itself (vendor/kimodo/kimodo).
-        if os.path.isdir(os.path.join(_p, "kimodo")):
-            if _p not in sys.path:
-                sys.path.insert(0, _p)
-            try:
-                import kimodo  # noqa: F401
-                _KIMODO_SOURCE = _p
-                break
-            except ImportError as _e:
-                log.warning(
-                    "[melite-kimodo] vendored source at %s failed to import (%s); "
-                    "see requirements.txt — pip install -r custom_nodes/melite-kimodo-nodes/requirements.txt",
-                    _p, _e,
-                )
-                sys.path.remove(_p)
-
-if _KIMODO_SOURCE is None:
+except ImportError as _e:
     # Register anyway (ComfyUI would drop the whole pack on a raise); the
     # failure then lands at KimodoLoader.load with this breadcrumb in the log.
+    _KIMODO_SOURCE = None
     log.error(
-        "[melite-kimodo] kimodo is NOT importable — KimodoTextToPose will fail. "
-        "Expected the vendored source at one of: %s "
-        "(or pip install vendor/kimodo into this venv).",
-        ", ".join(_CANDIDATES),
+        "[melite-kimodo] kimodo is NOT importable (%s) — "
+        "pip install -r custom_nodes/melite-kimodo-nodes/requirements.txt",
+        _e,
     )
 else:
     log.info("[melite-kimodo] kimodo source: %s", _KIMODO_SOURCE)

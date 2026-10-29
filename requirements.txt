@@ -4,15 +4,13 @@
 # anny-estimator pack folded in — shared torch/melite_model_base
 # spine, one registry entry, one nodes.yaml row shape).
 #
-# The kimodo package itself is NOT pip-declared here: the image no longer
-# bakes it (the old full Dockerfile `pip install -e vendor/kimodo` is
-# gone) — declare the package in the owning plugin's nodes/extensions.yaml
-# `pip:` list, or rely on the dev box sys.path bootstrap in __init__.py
-# (repo vendor/kimodo through the custom_nodes symlink). Everything else
-# kimodo needs (torch, transformers, peft, omegaconf, einops, tqdm, numpy,
-# scipy, huggingface_hub) already ships in the base env; hydra-core is the
-# one gap that broke the import chain with "No module named 'kimodo'"
-# mid-run.
+# The kimodo package itself ships as the pip leg at the bottom of this
+# file (audit 019 C6 deleted the dev-box sys.path bootstrap — the pip
+# leg is the ONE install door on dev boxes and cold Manager clones
+# alike). Everything else kimodo needs (torch, transformers, peft,
+# omegaconf, einops, tqdm, numpy, scipy, huggingface_hub) already
+# ships in the base env; hydra-core is the one gap that broke the
+# import chain with "No module named 'kimodo'" mid-run.
 hydra-core>=1.3
 # Anny engines (were the anny-estimator pack's rail — same pin the
 # owning 3d lane declares in its nodes.yaml `pip:`; ComfyUI-Manager
@@ -44,6 +42,12 @@ xatlas
 # the bootstrap knew (both candidates died on a fresh install — the
 # 2026-10-13 audit's blocker); the pip leg now installs the exact
 # upstream commit the estate ran (nv-tlabs@54257dd, its 1.0.0 tag
-# lineage). The __init__ bootstrap's `import kimodo` wins first, so
-# the pip leg satisfies it and the legacy candidates stay dormant.
+# lineage). The __init__ bootstrap is DELETED (audit 019 C6): this
+# pip leg is the one install door.
 kimodo @ git+https://github.com/nv-tlabs/kimodo.git@54257dd
+# melite-model-base — the VRAM-tracked pipeline spine nodes.py and
+# nodes_anny.py import (pip-first; the _vendor/ fallback copy inside
+# this pack covers an un-provisioned dev box). Declared here so a
+# cold Manager install resolves it with ZERO repo-layout crutches
+# (audit 019 C6: pip-declare or vendor — this is both).
+melite-model-base @ git+https://github.com/JayDataEngineer/melite-model-base.git@b18214cd772c10d248636f0a4a73eeb7cb53b231

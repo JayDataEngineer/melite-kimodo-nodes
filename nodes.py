@@ -269,14 +269,10 @@ def _apply_network_patches() -> None:
     if _network_patches_applied:
         return
 
-    # 2026-09-03 (inference.cpp migration round 2): PYTHONPATH=/opt makes
-    # "import kimodo" bind to /opt/kimodo (the vendored REPO ROOT) as a
-    # namespace package -> "cannot import name 'load_model' from 'kimodo'
-    # (unknown location)". Put the real package dir FIRST so the package
-    # at /opt/kimodo/kimodo wins over the /opt shadow.
-    import sys as _sys
-    if "/opt/kimodo" not in _sys.path:
-        _sys.path.insert(0, "/opt/kimodo")
+    # 2026-11-12 (audit 019 C6): the /opt/kimodo sys.path insert that
+    # used to live here is DELETED with the retired image layout — the
+    # requirements.txt pip leg owns the kimodo import now (see
+    # __init__.py's KIMODO SOURCE RESOLUTION note).
 
     # HF cache location: the container default HF_HOME=/tmp/huggingface is
     # nearly empty. The real Kimodo text-encoder cache (LLM2Vec, Llama-3)
