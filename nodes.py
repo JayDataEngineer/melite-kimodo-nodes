@@ -295,9 +295,10 @@ def _resolve_store_home(seat: str, category: str, decl_home: str) -> str:
         return hits[0]
     raise RuntimeError(
         f"Kimodo: no {category} home — set {seat} in the engine's "
-        f"environment (lanes.env EnvironmentFile) or seat the "
-        f"{category} key in the endpoint statement's "
-        f"extra_model_folders and re-provision extra_model_paths.yaml. "
+        f"environment (melite-comfyui.service unit override, or "
+        f"lanes.env for lane-run engines) or seat the {category} "
+        f"key in the endpoint statement's extra_model_folders and "
+        f"re-provision extra_model_paths.yaml. "
         f"The DECL home is {decl_home}."
     )
 
@@ -315,7 +316,8 @@ def _require_deployment_dir(seat: str, what: str) -> str:
         return value
     raise RuntimeError(
         f"Kimodo: {seat} is unset — the deployment must name {what} "
-        f"in the engine's environment (lanes.env EnvironmentFile). "
+        f"in the engine's environment (melite-comfyui.service unit "
+        f"override, or lanes.env for lane-run engines). "
         f"The pack carries no default path."
     )
 
