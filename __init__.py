@@ -16,7 +16,8 @@ The repo-layout sys.path bootstrap that used to live here (vendor/
 kimodo through the custom_nodes symlink, then the retired /opt/kimodo
 image layout) is DELETED: it could only ever fire on a dev box, and a
 cold Manager install rode the pip leg anyway. nodes.py imports kimodo
-lazily (``from kimodo import load_model`` inside KimodoLoader.load),
+lazily (``kimodo.model.loading`` / ``kimodo.model.load_model`` inside
+KimodoLoader.load and its per-load posture helper),
 so the pack registers fine either way; an unimportable kimodo lands
 at KimodoLoader.load with the breadcrumb below in the log.
 

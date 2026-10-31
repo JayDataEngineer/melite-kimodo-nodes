@@ -36,6 +36,7 @@ import logging
 import os
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -271,23 +272,20 @@ _TEXT_ENCODER_LOCK = threading.Lock()
 # INPUTS on KimodoLoader (defaults preserve the old forced posture),
 # never env.
 #
-# The pip kimodo lib's only checkpoint convention is its CHECKPOINT_DIR
-# lookup (load_model reads it through its own get_env_var helper) and
-# the llm2vec wrapper joins its own TEXT_ENCODERS_DIR with the Hydra
-# repo IDs and reads its own TEXT_ENCODER_DEVICE straight from
-# os.environ. The pack does NOT feed those seats: it redirects the
-# LIB's lookups — the lib module's get_env_var name is rebound to an
-# estate resolver (folder paths + node inputs), and the Hydra
-# text-encoder preset's repo IDs are rewritten to absolute folder-paths
-# homes before instantiation (so the wrapper's TEXT_ENCODERS_DIR join
-# never fires and from_pretrained loads local). Not one os.environ
-# access anywhere in this pack.
-_ESTATE_KIMODO_CFG: dict[str, object] = {
-    "offline": True,
-    "text_encoder_mode": "local",
-    "text_encoder_device": "cpu",
-}
-_network_patches_applied = False
+# The pip kimodo lib's checkpoint seat is an env-name contract
+# (load_model reads CHECKPOINT_DIR through an env helper; the function
+# owns no path parameter), and the env-strip re-cure's rebind shim never
+# ran — kimodo.model re-exports the load_model FUNCTION over the
+# submodule name, so `import kimodo.model.load_model` bound the function
+# and the rebind raised AttributeError on the engine. The cure is
+# DIRECT: the pack resolves the checkpoint folder itself through the
+# avatar folder category (the same _folder_home resolver every other
+# home here uses) and instantiates through the lib's own Hydra door
+# (config.yaml + instantiate_from_dict), the exact tail load_model()
+# would run minus the env seat. The llm2vec encoder conf is likewise
+# built from the pack-homed preset, so neither the wrapper's env seats
+# nor the lib's env-name selector ever run. Not one env name appears in
+# this pack.
 _orig_hf_model_info = None
 
 
@@ -326,66 +324,41 @@ def _folder_home(category: str, decl_home: str) -> str:
 def _apply_network_patches(
     *,
     offline: bool,
-    text_encoder_mode: str,
     text_encoder_device: str,
 ) -> None:
-    """Redirect the pip lib's lookups onto folder paths + node inputs.
+    """Apply the per-load lib posture: offline hub + folder-homed presets.
 
-    Idempotent-per-process for the lib shims; the preset rewrite and
-    the offline posture re-apply on every load so a changed node input
-    takes effect without a process restart. No os.environ reads or
-    writes — the only "env" touched is the lib module's own
-    get_env_var name, rebound to the estate resolver.
+    Re-applies on every load so a changed node input takes effect
+    without a process restart. No env name is touched anywhere: the
+    checkpoint dir is resolved by the pack itself in KimodoLoader.load
+    (the lib's env-name checkpoint seat is never consulted), the
+    encoder preset rides the llm2vec folder homes + the
+    text_encoder_device node input, and the offline posture is a
+    huggingface_hub module attribute.
     """
-    global _network_patches_applied, _orig_hf_model_info
-    _ESTATE_KIMODO_CFG.update({
-        "offline": bool(offline),
-        "text_encoder_mode": text_encoder_mode,
-        "text_encoder_device": text_encoder_device,
-    })
-
     # 2026-11-12 (audit 019 C6): the /opt/kimodo sys.path insert that
     # used to live here is DELETED with the retired image layout — the
     # requirements.txt pip leg owns the kimodo import now (see
     # __init__.py's KIMODO SOURCE RESOLUTION note).
 
-    import kimodo.model.load_model as _lm
-
-    # ── Lib env-name shim (no process env) ──────────────────────────
-    # CHECKPOINT_DIR: the lib's only checkpoint convention — serve the
-    # avatar folder category's root (the lib appends the variant folder
-    # name, e.g. Kimodo-SOMA-RP-v1.1, itself).
-    # TEXT_ENCODER_MODE: the node input (default "local" skips the
-    # phantom API probe the vendor "auto" default wastes 5-10s on).
-    # Every other name delegates to the lib's own reader untouched.
-    if not getattr(_lm, "_estate_env_shim", False):
-        _lm._estate_orig_get_env = _lm.get_env_var
-
-        def _estate_get_env(name, default=None):
-            if name == "CHECKPOINT_DIR":
-                return _folder_home("avatar", "avatar/kimodo")
-            if name == "TEXT_ENCODER_MODE":
-                return str(_ESTATE_KIMODO_CFG["text_encoder_mode"])
-            return _lm._estate_orig_get_env(name, default)
-
-        _lm.get_env_var = _estate_get_env
-        _lm._estate_env_shim = True
-
     # ── LLM2Vec adapter homes (no process env) ──────────────────────
     # llm2vec_wrapper.py joins its own TEXT_ENCODERS_DIR with the
     # Hydra-provided repo IDs ("McGill-NLP/LLM2Vec-Meta-Llama-3-8B-...")
     # to resolve local paths. Rewrite the preset's repo IDs to absolute
-    # folder-paths homes BEFORE instantiation: the wrapper's join leg
-    # never fires (it only fires when its own seat is set, which this
-    # pack never sets) and from_pretrained loads the local tree. The
-    # llm2vec category (endpoint extra_model_folders) carries the
-    # <org>/<repo> layout; without it from_pretrained would try HF Hub
-    # and crash with LocalEntryNotFoundError. The device pin rides the
-    # preset kwargs too (the wrapper's own device seat stays unset).
+    # folder-paths homes BEFORE the encoder conf is built: from_pretrained
+    # loads the local tree directly and the wrapper's join leg never
+    # fires (it only fires when its own seat is set, which this pack
+    # never sets). The llm2vec category (endpoint extra_model_folders)
+    # carries the <org>/<repo> layout; without it from_pretrained would
+    # try HF Hub and crash with LocalEntryNotFoundError. The device pin
+    # rides the preset kwargs too (the wrapper's own device seat stays
+    # unset).
+    from kimodo.model.load_model import TEXT_ENCODER_PRESETS
+
     enc_root = _folder_home(
         "llm2vec", "llm2vec/<org>/<repo> adapters "
         "(McGill-NLP/LLM2Vec-Meta-Llama-3-8B-*)")
-    for _preset in _lm.TEXT_ENCODER_PRESETS.values():
+    for _preset in TEXT_ENCODER_PRESETS.values():
         _kw = _preset.get("kwargs", {})
         for _key in ("base_model_name_or_path", "peft_model_name_or_path"):
             _repo = str(_kw.get(_key, ""))
@@ -431,7 +404,44 @@ def _apply_network_patches(
     except ImportError:
         pass
 
-    _network_patches_applied = True
+
+def _text_encoder_conf(text_encoder_mode: str) -> dict:
+    """Build the text-encoder conf for the first load (no cached encoder).
+
+    The preset has already been homed + device-pinned by
+    _apply_network_patches, so the local conf carries the llm2vec
+    folder homes and the node input's device directly — the lib's
+    env-name selector (_select_text_encoder_conf) never runs. mode
+    "local" (the default) skips the vendor API probe the lib's "auto"
+    wastes 5-10s on; mode "auto" keeps the vendor parity semantics —
+    one probe of the vendor API service, local on any failure — using
+    the lib's own api-conf builder.
+    """
+    from kimodo.model.load_model import (
+        TEXT_ENCODER_PRESETS,
+        _build_api_text_encoder_conf,
+    )
+    from kimodo.model.loading import (
+        DEFAULT_TEXT_ENCODER_URL,
+        instantiate_from_dict,
+    )
+
+    preset = TEXT_ENCODER_PRESETS["llm2vec"]
+    local_conf = {"_target_": str(preset["target"]), **preset["kwargs"]}
+    if text_encoder_mode != "auto":
+        return local_conf
+    try:
+        api_conf = _build_api_text_encoder_conf(DEFAULT_TEXT_ENCODER_URL)
+        probe = instantiate_from_dict(api_conf)
+        probe(["healthcheck"])
+        return api_conf
+    except Exception as error:
+        log.info(
+            "KimodoLoader: text-encoder API probe failed "
+            "(%s: %s) — building the local LLM2Vec encoder",
+            type(error).__name__, error,
+        )
+        return local_conf
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -502,18 +512,17 @@ class KimodoLoader:
             )
         _apply_network_patches(
             offline=offline,
-            text_encoder_mode=text_encoder_mode,
             text_encoder_device=text_encoder_device,
         )
-        from kimodo import load_model
 
         # ── Free VRAM before Hydra-based loading ──────────────────────────
-        # load_model() uses Hydra's instantiate_from_dict, which instantiates
-        # the LLM2Vec text encoder.  The encoder defaults to device="auto" →
-        # "cuda" and moves the 16 GB Llama-3 backbone to GPU inside __init__ —
-        # BEFORE ComfyUI's load_models_gpu() ever runs.  If a previous brick
-        # (e.g. qwen-image-edit) left models cached in ComfyUI's VRAM, those
-        # models are still resident and the encoder's allocation OOMs.
+        # The Hydra instantiate (config.yaml + instantiate_from_dict)
+        # instantiates the LLM2Vec text encoder.  The encoder defaults to
+        # device="auto" → "cuda" and moves the 16 GB Llama-3 backbone to GPU
+        # inside __init__ — BEFORE ComfyUI's load_models_gpu() ever runs.  If
+        # a previous brick (e.g. qwen-image-edit) left models cached in
+        # ComfyUI's VRAM, those models are still resident and the encoder's
+        # allocation OOMs.
         #
         # ComfyUI's automatic VRAM management only fires when ITS OWN loaders
         # call load_models_gpu().  Hydra bypasses that path entirely, so we
@@ -541,31 +550,76 @@ class KimodoLoader:
         log.info("KimodoLoader: loading %s on CPU (offload device)", variant)
         t0 = time.perf_counter()
 
-        # Encoder reuse: hand the cached CPU-pinned text encoder to
-        # load_model so it skips selection/instantiation entirely (see the
+        # ── DIRECT checkpoint door (motion cure, 2026-11-01) ─────────────
+        # The pinned lib's load_model() owns no path parameter; its only
+        # checkpoint seat is an env-name lookup the pack may not feed (the
+        # rebind shim that used to redirect it never ran — the package
+        # re-exports the load_model FUNCTION over the submodule). The pack
+        # resolves the folder itself through the avatar category (the same
+        # resolver every other home here uses) and instantiates through the
+        # lib's own Hydra door: config.yaml merged with the checkpoint_dir
+        # runtime conf — exactly the tail load_model() runs, minus the env
+        # seat. resolve=True folds the ${oc.select:checkpoint_dir}
+        # interpolations (ckpt_path, stats_path); the runtime key itself is
+        # no Kimodo __init__ param and drops after the fold.
+        from omegaconf import OmegaConf
+        from kimodo.model.loading import instantiate_from_dict
+
+        avatar_root = Path(_folder_home("avatar", "avatar/kimodo"))
+        model_path = avatar_root / variant
+        if not (model_path / "config.yaml").exists():
+            raise RuntimeError(
+                f"KimodoLoader: no checkpoint folder for {variant!r} under "
+                f"the avatar folder category ({avatar_root}) — config.yaml "
+                f"is missing. The variant must name a provisioned model "
+                f"directory (the estate DECL's lane_inputs model_path); "
+                f"seat the avatar key in the endpoint statement's "
+                f"extra_model_folders and regenerate "
+                f"data/runtime/comfyui/extra_model_paths.yaml."
+            )
+
+        # Encoder reuse: the cached CPU-pinned text encoder rides the
+        # instantiate as a placeholder-free direct injection (see the
         # module-level comment for the marathon7 story). None on first load
-        # → kimodo builds it internally and we steal it below. Keyed by
-        # variant + device + mode so a changed node input builds (and
-        # caches) its own instance instead of reusing a stale one.
+        # → the pack-built encoder conf instantiates inside the model and we
+        # steal it below. Keyed by variant + device + mode so a changed node
+        # input builds (and caches) its own instance instead of reusing a
+        # stale one.
         cache_key = (variant, text_encoder_device, text_encoder_mode)
         with _TEXT_ENCODER_LOCK:
             encoder = _TEXT_ENCODER_CACHE.get(cache_key)
 
-        # Rule 1: instantiate on the offload device. NO .to(cuda).
-        raw_model, resolved = load_model(
-            variant,
-            device="cpu",
-            default_family="Kimodo",
-            return_resolved_name=True,
-            text_encoder=encoder,
+        runtime_extra = (
+            {} if encoder is not None
+            else {"text_encoder": _text_encoder_conf(text_encoder_mode)}
         )
+        merged = OmegaConf.merge(
+            OmegaConf.load(model_path / "config.yaml"),
+            OmegaConf.create(
+                {"checkpoint_dir": str(model_path), **runtime_extra}
+            ),
+        )
+        model_cfg = OmegaConf.to_container(merged, resolve=True)
+        model_cfg.pop("checkpoint_dir", None)
+        if encoder is not None:
+            # Prevent Hydra from instantiating a second encoder; the cached
+            # one is reattached right after (the lib's own reuse tail).
+            model_cfg["text_encoder"] = None
+
+        # Rule 1: instantiate on the offload device. NO .to(cuda).
+        raw_model = instantiate_from_dict(
+            model_cfg, overrides={"device": "cpu"})
+        if encoder is not None:
+            raw_model.text_encoder = encoder
+        resolved = variant
 
         if encoder is None:
-            # First load: kimodo instantiated the encoder itself (device
-            # pinned by the text_encoder_device node input via the
-            # preset rewrite above). Cache it so every later load passes
-            # it back — zero instantiation, zero checkpoint load, zero
-            # second 21.7GB resident copy.
+            # First load: the pack-built encoder conf instantiated the
+            # encoder inside the model (device pinned by the
+            # text_encoder_device node input via the preset rewrite above).
+            # Cache it so every later load passes it back — zero
+            # instantiation, zero checkpoint load, zero second 21.7GB
+            # resident copy.
             with _TEXT_ENCODER_LOCK:
                 if cache_key not in _TEXT_ENCODER_CACHE:
                     internal = getattr(raw_model, "text_encoder", None)
