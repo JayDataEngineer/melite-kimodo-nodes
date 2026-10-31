@@ -336,6 +336,13 @@ def _apply_network_patches(
     text_encoder_device node input, and the offline posture is a
     huggingface_hub module attribute.
     """
+    # The module-level cache (:289) is ASSIGNED below (the offline arm
+    # stashes the lib's model_info, the online arm restores it) — without
+    # this declaration Python compiles the name function-local and the
+    # first read raises UnboundLocalError (the live press red,
+    # 2026-11-13 block).
+    global _orig_hf_model_info
+
     # 2026-11-12 (audit 019 C6): the /opt/kimodo sys.path insert that
     # used to live here is DELETED with the retired image layout — the
     # requirements.txt pip leg owns the kimodo import now (see
