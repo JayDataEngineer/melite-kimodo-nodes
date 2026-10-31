@@ -87,7 +87,12 @@ class _InterruptibleBar:
         pass
 
 
-DEFAULT_MODEL = os.environ.get("KIMODO_MODEL", "Kimodo-SOMA-RP-v1.1")
+# THE ESTATE MODEL SEAT (2026-11-01, §3.14 conformance): there is NO
+# node-side model default. The default lives in the estate DECL
+# (packages/models/kimodo lane_inputs model_path) and the composer
+# passes it as model_name on every graph — an empty model_name refuses
+# loud at the load door (see KimodoLoader.load). KIMODO_MODEL is not
+# read here: locations never come from process env in this pack.
 DEFAULT_FPS = 30
 DEFAULT_DURATION_SEC = 6.0
 DEFAULT_DIFFUSION_STEPS = 100
@@ -263,6 +268,76 @@ _TEXT_ENCODER_LOCK = threading.Lock()
 _network_patches_applied = False
 
 
+def _resolve_store_home(seat: str, category: str, decl_home: str) -> str:
+    """Resolve a model home: deployment env, then ComfyUI folders.
+
+    Estate §3.14 (2026-11-01) — the pack holds no /mnt/data literals.
+    Order: the deployment env var FIRST so an explicit machine statement
+    always wins, then ComfyUI's folder_paths category (the endpoint
+    statement's extra_model_folders key, seated by the provisioner).
+    Found NEITHER way, the load refuses LOUD naming both seats —
+    never a silent fallback to a hardcoded absolute.
+
+    :param seat: the deployment env var (operator seat).
+    :param category: the ComfyUI folder_paths category.
+    :param decl_home: the estate DECL's lane_homes row (the refusal
+        names it so the operator can verify the provisioned tree).
+    """
+    env = os.environ.get(seat, "").strip()
+    if env:
+        return env
+    try:
+        import folder_paths
+        hits = folder_paths.get_folder_paths(category)
+    except ImportError:
+        hits = []
+    if hits:
+        return hits[0]
+    raise RuntimeError(
+        f"Kimodo: no {category} home — set {seat} in the engine's "
+        f"environment (lanes.env EnvironmentFile) or seat the "
+        f"{category} key in the endpoint statement's "
+        f"extra_model_folders and re-provision extra_model_paths.yaml. "
+        f"The DECL home is {decl_home}."
+    )
+
+
+def _require_deployment_dir(seat: str, what: str) -> str:
+    """A location only the deployment can name (no store category).
+
+    Returns the deployment value; refuses LOUD naming the seat when
+    the deployment did not provide it. The estate DECL provisions no
+    tree for these (encoder adapters, hub caches), so there is no
+    folder-machinery fallback — the machine statement IS the truth.
+    """
+    value = os.environ.get(seat, "").strip()
+    if value:
+        return value
+    raise RuntimeError(
+        f"Kimodo: {seat} is unset — the deployment must name {what} "
+        f"in the engine's environment (lanes.env EnvironmentFile). "
+        f"The pack carries no default path."
+    )
+
+
+def _mirror_hf_cache(seat: str) -> None:
+    """Mirror a deployment-named HF cache into huggingface_hub constants.
+
+    No-op when the deployment did not name the var (library defaults
+    stand). Called before the offline patch so an online deployment is
+    never sabotaged by import-time constants.
+    """
+    value = os.environ.get(seat, "").strip()
+    if not value:
+        return
+    try:
+        from pathlib import Path
+        import huggingface_hub.constants as hf_const
+        setattr(hf_const, seat, Path(value))
+    except (ImportError, AttributeError):
+        pass
+
+
 def _apply_network_patches() -> None:
     """Idempotent. Sets HF cache paths + monkey-patches huggingface_hub."""
     global _network_patches_applied
@@ -274,24 +349,43 @@ def _apply_network_patches() -> None:
     # requirements.txt pip leg owns the kimodo import now (see
     # __init__.py's KIMODO SOURCE RESOLUTION note).
 
-    # HF cache location: the container default HF_HOME=/tmp/huggingface is
-    # nearly empty. The real Kimodo text-encoder cache (LLM2Vec, Llama-3)
-    # lives on the shared models volume at /mnt/data/models/cache/huggingface/.
-    # 2026-09-03 (inference.cpp migration round 2): the REAL hub cache with
-    # complete snapshots (meta-llama base 15G + McGill adapters) lives at
-    # /mnt/data/huggingface — /mnt/data/models/cache/huggingface holds only
-    # 12K stubs, and pointing at it broke offline base-model resolution.
-    # 2026-09-03 round 3: the serving container does NOT see the host's
-    # /mnt/data/huggingface (no bind mount). The hub cache now lives IN the
-    # shared volume as hardlinks (zero extra bytes): /mnt/data/models/hf-hub.
-    _HF_CACHE = "/mnt/data/models/hf-home"
-    os.environ["HF_HOME"] = _HF_CACHE
-    os.environ["HF_HUB_CACHE"] = "/mnt/data/models/hf-hub"
+    # ── Estate §3.14 locations (2026-11-01) ──────────────────────────
+    # The pack holds NO /mnt/data literals and reads NO location from
+    # process env as configuration. Every home resolves deployment-env
+    # FIRST (the operator's seat — the engine lane's EnvironmentFile,
+    # which the estate runtime leg reads too) then ComfyUI's folder
+    # machinery (the endpoint statement's extra_model_folders keys,
+    # seated by the provisioner into extra_model_paths.yaml); a home
+    # found NEITHER way refuses LOUD naming both seats. The pip kimodo
+    # lib's ONLY checkpoint calling convention is the CHECKPOINT_DIR
+    # env var (no path argument exists), so the DERIVED root is seated
+    # there as the adapter — a write, never a configuration read.
 
-    # Kimodo checkpoint dir: vendor load_model() resolves checkpoint folder
-    # via CHECKPOINT_DIR. Kimodo-SOMA-RP-v1.1/ has model.safetensors +
-    # config.yaml.
-    os.environ.setdefault("CHECKPOINT_DIR", "/mnt/data/models/avatar/kimodo")
+    # Kimodo checkpoint dir: vendor load_model() resolves the variant
+    # folder via CHECKPOINT_DIR. Kimodo-SOMA-RP-v1.1/ has
+    # model.safetensors + config.yaml.
+    os.environ["CHECKPOINT_DIR"] = _resolve_store_home(
+        "CHECKPOINT_DIR", "avatar", "avatar/kimodo")
+
+    # LLM2Vec adapter paths: llm2vec_wrapper.py joins TEXT_ENCODERS_DIR
+    # with the Hydra-provided repo IDs
+    # ("McGill-NLP/LLM2Vec-Meta-Llama-3-8B-...") to resolve local paths.
+    # Without this, from_pretrained() tries HF Hub under
+    # HF_HUB_OFFLINE=1 and crashes with LocalEntryNotFoundError. The
+    # adapters ride the deployment env (no store category carries them).
+    _require_deployment_dir(
+        "TEXT_ENCODERS_DIR",
+        "the LLM2Vec adapter root (<org>/<repo> layout)")
+
+    # HF caches — the deployment owns these (engine env / lanes.env);
+    # the pack no longer forces them. Unset = the library defaults
+    # stand. When the deployment names them, mirror to the
+    # huggingface_hub constants (env was read at import time), so an
+    # online deployment (HF_HUB_OFFLINE=0) is not sabotaged by the
+    # runtime constant (2026-08-13 fix).
+    _mirror_hf_cache("HF_HOME")
+    _mirror_hf_cache("HF_HUB_CACHE")
+    _mirror_hf_cache("HUGGINGFACE_CACHE_DIR")
 
     # Offline mode (prevent network calls in air-gapped pods).
     # setdefault — respects the deployment config. A container that sets
@@ -305,36 +399,16 @@ def _apply_network_patches() -> None:
     # to TEXT_ENCODER_MODE=auto which probes a text-encoder API service that
     # doesn't exist in this pod, wastes 5-10s on a failed health check, then
     # falls back to local anyway. "local" skips the probe.
+    # (Behavior flag, not a location — outside the §3.14 census.)
     os.environ.setdefault("TEXT_ENCODER_MODE", "local")
 
-    # LLM2Vec adapter paths: llm2vec_wrapper.py joins TEXT_ENCODERS_DIR with
-    # the Hydra-provided repo IDs ("McGill-NLP/LLM2Vec-Meta-Llama-3-8B-...")
-    # to resolve local paths.  Without this, from_pretrained() tries HF Hub
-    # under HF_HUB_OFFLINE=1 and crashes with LocalEntryNotFoundError.
-    # The adapter weights live at /mnt/data/models/llm2vec/<org>/<repo>/.
-    os.environ.setdefault("TEXT_ENCODERS_DIR", "/mnt/data/models/llm2vec")
-
-    # HF cache dir for the wrapper's cache_dir kwarg (AutoModel/AutoTokenizer
-    # base-model loading).  The Llama-3-8B-Instruct blobs live at
-    # /mnt/data/models/cache/huggingface/ — the Kimodo text encoder's base
-    # model, loaded from this cache when TEXT_ENCODERS_DIR resolves the
-    # adapter locally.
-    os.environ.setdefault("HUGGINGFACE_CACHE_DIR", "/mnt/data/models/hf-hub")
-
     try:
-        from pathlib import Path
         import huggingface_hub.constants as hf_const
         # Mirror the resolved env so an online deployment (HF_HUB_OFFLINE=0)
         # is not sabotaged by the runtime constant (the prior forced True
         # blocked every huggingface_hub call inside the inference process,
         # bypassing the gateway's download utility). 2026-08-13 fix.
         hf_const.HF_HUB_OFFLINE = os.environ.get("HF_HUB_OFFLINE", "1") == "1"
-        # Override already-loaded cache paths (env was read at import time)
-        # 2026-09-03 round 3: the hub cache DIR is hf-hub (hardlinked into
-        # the shared volume), NOT the HF_HOME root — the old override pointed
-        # both constants at hf-home and broke offline resolution.
-        hf_const.HF_HUB_CACHE = Path("/mnt/data/models/hf-hub")
-        hf_const.HF_HOME = Path(_HF_CACHE)
     except (ImportError, AttributeError):
         pass
 
@@ -415,7 +489,20 @@ class KimodoLoader:
         mm.unload_all_models()
         mm.soft_empty_cache()
 
-        variant = model_name.strip() or DEFAULT_MODEL
+        # NO SILENT DEFAULT (estate §3.14): the model name rides the
+        # graph from the estate composer (DECL lane_inputs model_path —
+        # Kimodo-SOMA-RP-v1.1). A hand-built graph that leaves it empty
+        # refuses here, naming the seat, instead of borrowing an env
+        # fallback the estate cannot see.
+        variant = model_name.strip()
+        if not variant:
+            raise RuntimeError(
+                "KimodoLoader: model_name is empty — pass the model "
+                "directory name (the estate DECL's lane_inputs "
+                "model_path, e.g. Kimodo-SOMA-RP-v1.1; the composer "
+                "always passes it). KIMODO_MODEL is not read: model "
+                "identity rides the graph, never process env."
+            )
         log.info("KimodoLoader: loading %s on CPU (offload device)", variant)
         t0 = time.perf_counter()
 
