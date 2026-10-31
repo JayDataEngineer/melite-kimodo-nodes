@@ -321,6 +321,40 @@ def _folder_home(category: str, decl_home: str) -> str:
     )
 
 
+def _variant_dir(category: str, decl_home: str, variant: str) -> Path:
+    """Resolve a variant checkpoint dir under the category's folder paths.
+
+    The direct door's first live load (2026-11-13 block) reded the
+    root/variant join: the provisioned trees seat the checkpoint under
+    the DECL home's TAIL ("avatar/kimodo" -> <root>/kimodo/<variant>),
+    one level below the category root _folder_home returns. Both
+    spellings are walked across EVERY folder path of the category (extra
+    paths first; the DECL bare spelling and a <tail>/-prefixed combo
+    spelling) — the first dir carrying config.yaml wins. A miss refuses
+    loud naming every candidate scanned.
+    """
+    try:
+        import folder_paths
+        roots = [Path(p) for p in folder_paths.get_folder_paths(category)]
+    except ImportError:
+        roots = []
+    tail = decl_home.replace("\\", "/").rsplit("/", 1)[-1]
+    candidates = [root / variant for root in roots]
+    candidates += [root / tail / variant for root in roots if tail]
+    for candidate in candidates:
+        if (candidate / "config.yaml").is_file():
+            return candidate
+    raise RuntimeError(
+        f"Kimodo: no checkpoint dir for {variant!r} under the {category} "
+        f"folder category — scanned: "
+        f"{', '.join(str(c) for c in candidates) or '(no seats)'}. "
+        f"Seat the {category} key in the endpoint statement's "
+        f"extra_model_folders and regenerate "
+        f"data/runtime/comfyui/extra_model_paths.yaml. "
+        f"The DECL home is {decl_home}."
+    )
+
+
 def _apply_network_patches(
     *,
     offline: bool,
@@ -572,18 +606,7 @@ class KimodoLoader:
         from omegaconf import OmegaConf
         from kimodo.model.loading import instantiate_from_dict
 
-        avatar_root = Path(_folder_home("avatar", "avatar/kimodo"))
-        model_path = avatar_root / variant
-        if not (model_path / "config.yaml").exists():
-            raise RuntimeError(
-                f"KimodoLoader: no checkpoint folder for {variant!r} under "
-                f"the avatar folder category ({avatar_root}) — config.yaml "
-                f"is missing. The variant must name a provisioned model "
-                f"directory (the estate DECL's lane_inputs model_path); "
-                f"seat the avatar key in the endpoint statement's "
-                f"extra_model_folders and regenerate "
-                f"data/runtime/comfyui/extra_model_paths.yaml."
-            )
+        model_path = _variant_dir("avatar", "avatar/kimodo", variant)
 
         # Encoder reuse: the cached CPU-pinned text encoder rides the
         # instantiate as a placeholder-free direct injection (see the
