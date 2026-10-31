@@ -236,56 +236,75 @@ def _root_tied_to_one_spot(motion_constraints: str, tol_m: float = 0.02) -> bool
 
 # ── Text-encoder lifecycle (the marathon7 lesson, 2026-08-06) ───────────
 # kimodo's load_model() instantiates the LLM2Vec text encoder (Llama-3-8B,
-# ~21.7GB) internally on EVERY call. TEXT_ENCODER_MODE=local plus ComfyUI's
-# execution cache masked this: the loader node's output was cached, so the
-# encoder was built once per process and reused. The OOM fix's e.reset()
-# drops cached outputs → every fresh load stacked a SECOND 21.7GB encoder
-# on the GPU → zero VRAM budget → load_models_gpu took the lowvram path
-# (nothing moved) while model_patcher still set self.model.device = cuda
-# → "Expected all tensors to be on the same device" in
-# diffusion.space_timesteps.
+# ~21.7GB) internally on EVERY call. The text_encoder_mode node input
+# (default "local") plus ComfyUI's execution cache masked this: the loader
+# node's output was cached, so the encoder was built once per process and
+# reused. The OOM fix's e.reset() drops cached outputs → every fresh load
+# stacked a SECOND 21.7GB encoder on the GPU → zero VRAM budget →
+# load_models_gpu took the lowvram path (nothing moved) while
+# model_patcher still set self.model.device = cuda → "Expected all tensors
+# to be on the same device" in diffusion.space_timesteps.
 #
 # Fix (both halves are required):
-#   1. PIN TO CPU — TEXT_ENCODER_DEVICE=cpu (read by LLM2VecEncoder.__init__)
+#   1. PIN TO CPU — the text_encoder_device node input (default "cpu")
 #      makes the encoder live in RAM, never VRAM, so ComfyUI's native
 #      model_management always has full VRAM budget for the diffusion
 #      model and load_models_gpu never takes the lowvram path.
-#   2. OWN THE SINGLETON — the node pack caches the encoder module-level and
-#      passes it back via load_model(..., text_encoder=...) (the documented
-#      reuse param: "skips text encoder selection/instantiation entirely").
-#      One 21.7GB instance for the life of the process. Encoding happens on
-#      CPU (seconds for one prompt); kimodo_model._generate crosses the
+#   2. OWN THE SINGLETON — the node pack caches the encoder module-level
+#      (keyed by variant + device + mode) and passes it back via
+#      load_model(..., text_encoder=...) (the documented reuse param:
+#      "skips text encoder selection/instantiation entirely"). One 21.7GB
+#      instance for the life of the process. Encoding happens on CPU
+#      (seconds for one prompt); kimodo_model._generate crosses the
 #      result to the GPU via text_feat.to(device).
-os.environ.setdefault("TEXT_ENCODER_DEVICE", "cpu")
-_TEXT_ENCODER_CACHE: dict[str, object] = {}
+_TEXT_ENCODER_CACHE: dict[tuple[str, str, str], object] = {}
 _TEXT_ENCODER_LOCK = threading.Lock()
 
 
-# ── Network patches (ported verbatim from media/motion/kimodo_pose.py) ─
-# These MUST run BEFORE `from kimodo import load_model`. Without them the
-# container cannot find the cached text encoder (LLM2Vec/Llama-3) and the
-# mistral tokenizer check phones home and dies on air-gapped pods.
+# ── Estate location + behavior seats (VENDOR RE-CURE, 2026-11-01) ─────
+# COMFYUI EXTENSION NEVER USE ENV VARIABLES. This pack reads and writes
+# NO process env for locations or behavior flags — no os.environ.get /
+# setdefault / __setitem__, no os.getenv, no putenv. Model homes resolve
+# ONLY via ComfyUI's folder_paths categories seated by the endpoint
+# statement's extra_model_folders keys (the provisioner regenerates
+# extra_model_paths.yaml); the offline/device/mode switches are NODE
+# INPUTS on KimodoLoader (defaults preserve the old forced posture),
+# never env.
+#
+# The pip kimodo lib's only checkpoint convention is its CHECKPOINT_DIR
+# lookup (load_model reads it through its own get_env_var helper) and
+# the llm2vec wrapper joins its own TEXT_ENCODERS_DIR with the Hydra
+# repo IDs and reads its own TEXT_ENCODER_DEVICE straight from
+# os.environ. The pack does NOT feed those seats: it redirects the
+# LIB's lookups — the lib module's get_env_var name is rebound to an
+# estate resolver (folder paths + node inputs), and the Hydra
+# text-encoder preset's repo IDs are rewritten to absolute folder-paths
+# homes before instantiation (so the wrapper's TEXT_ENCODERS_DIR join
+# never fires and from_pretrained loads local). Not one os.environ
+# access anywhere in this pack.
+_ESTATE_KIMODO_CFG: dict[str, object] = {
+    "offline": True,
+    "text_encoder_mode": "local",
+    "text_encoder_device": "cpu",
+}
 _network_patches_applied = False
+_orig_hf_model_info = None
 
 
-def _resolve_store_home(seat: str, category: str, decl_home: str) -> str:
-    """Resolve a model home: deployment env, then ComfyUI folders.
+def _folder_home(category: str, decl_home: str) -> str:
+    """Resolve a model home: ComfyUI folder_paths category ONLY.
 
-    Estate §3.14 (2026-11-01) — the pack holds no absolute model-path literals.
-    Order: the deployment env var FIRST so an explicit machine statement
-    always wins, then ComfyUI's folder_paths category (the endpoint
-    statement's extra_model_folders key, seated by the provisioner).
-    Found NEITHER way, the load refuses LOUD naming both seats —
-    never a silent fallback to a hardcoded absolute.
+    Estate VENDOR RE-CURE (2026-11-01) — the pack holds no absolute
+    model-path literals and reads no location from process env. The
+    endpoint statement's extra_model_folders key (seated by the
+    provisioner into extra_model_paths.yaml) is the only seat. A home
+    found no way refuses LOUD naming the category seat + the DECL
+    home — never a silent fallback, never a unit/env seat.
 
-    :param seat: the deployment env var (operator seat).
     :param category: the ComfyUI folder_paths category.
     :param decl_home: the estate DECL's lane_homes row (the refusal
-        names it so the operator can verify the provisioned tree).
+        names it so the provisioned tree can be verified).
     """
-    env = os.environ.get(seat, "").strip()
-    if env:
-        return env
     try:
         import folder_paths
         hits = folder_paths.get_folder_paths(category)
@@ -294,147 +313,121 @@ def _resolve_store_home(seat: str, category: str, decl_home: str) -> str:
     if hits:
         return hits[0]
     raise RuntimeError(
-        f"Kimodo: no {category} home — set {seat} in the engine's "
-        f"environment (melite-comfyui.service unit override, or "
-        f"lanes.env for lane-run engines) or seat the {category} "
-        f"key in the endpoint statement's extra_model_folders and "
-        f"re-provision extra_model_paths.yaml. "
+        f"Kimodo: no {category} home in ComfyUI's folder machinery — "
+        f"seat the {category} key in the endpoint statement's "
+        f"extra_model_folders and regenerate "
+        f"data/runtime/comfyui/extra_model_paths.yaml (node "
+        f"--experimental-strip-types "
+        f"packages/engines/comfyui-cordis/scripts/provision.ts paths). "
         f"The DECL home is {decl_home}."
     )
 
 
-def _require_deployment_dir(seat: str, what: str) -> str:
-    """A location only the deployment can name (no store category).
+def _apply_network_patches(
+    *,
+    offline: bool,
+    text_encoder_mode: str,
+    text_encoder_device: str,
+) -> None:
+    """Redirect the pip lib's lookups onto folder paths + node inputs.
 
-    Returns the deployment value; refuses LOUD naming the seat when
-    the deployment did not provide it. The estate DECL provisions no
-    tree for these (encoder adapters, hub caches), so there is no
-    folder-machinery fallback — the machine statement IS the truth.
+    Idempotent-per-process for the lib shims; the preset rewrite and
+    the offline posture re-apply on every load so a changed node input
+    takes effect without a process restart. No os.environ reads or
+    writes — the only "env" touched is the lib module's own
+    get_env_var name, rebound to the estate resolver.
     """
-    value = os.environ.get(seat, "").strip()
-    if value:
-        return value
-    raise RuntimeError(
-        f"Kimodo: {seat} is unset — the deployment must name {what} "
-        f"in the engine's environment (melite-comfyui.service unit "
-        f"override, or lanes.env for lane-run engines). "
-        f"The pack carries no default path."
-    )
-
-
-def _mirror_hf_cache(seat: str) -> None:
-    """Mirror a deployment-named HF cache into huggingface_hub constants.
-
-    No-op when the deployment did not name the var (library defaults
-    stand). Called before the offline patch so an online deployment is
-    never sabotaged by import-time constants.
-    """
-    value = os.environ.get(seat, "").strip()
-    if not value:
-        return
-    try:
-        from pathlib import Path
-        import huggingface_hub.constants as hf_const
-        setattr(hf_const, seat, Path(value))
-    except (ImportError, AttributeError):
-        pass
-
-
-def _apply_network_patches() -> None:
-    """Idempotent. Sets HF cache paths + monkey-patches huggingface_hub."""
-    global _network_patches_applied
-    if _network_patches_applied:
-        return
+    global _network_patches_applied, _orig_hf_model_info
+    _ESTATE_KIMODO_CFG.update({
+        "offline": bool(offline),
+        "text_encoder_mode": text_encoder_mode,
+        "text_encoder_device": text_encoder_device,
+    })
 
     # 2026-11-12 (audit 019 C6): the /opt/kimodo sys.path insert that
     # used to live here is DELETED with the retired image layout — the
     # requirements.txt pip leg owns the kimodo import now (see
     # __init__.py's KIMODO SOURCE RESOLUTION note).
 
-    # ── Estate §3.14 locations (2026-11-01) ──────────────────────────
-    # The pack holds NO /mnt/data literals and reads NO location from
-    # process env as configuration. Every home resolves deployment-env
-    # FIRST (the operator's seat — the engine lane's EnvironmentFile,
-    # which the estate runtime leg reads too) then ComfyUI's folder
-    # machinery (the endpoint statement's extra_model_folders keys,
-    # seated by the provisioner into extra_model_paths.yaml); a home
-    # found NEITHER way refuses LOUD naming both seats. The pip kimodo
-    # lib's ONLY checkpoint calling convention is the CHECKPOINT_DIR
-    # env var (no path argument exists), so the DERIVED root is seated
-    # there as the adapter — a write, never a configuration read.
+    import kimodo.model.load_model as _lm
 
-    # Kimodo checkpoint dir: vendor load_model() resolves the variant
-    # folder via CHECKPOINT_DIR. Kimodo-SOMA-RP-v1.1/ has
-    # model.safetensors + config.yaml.
-    os.environ["CHECKPOINT_DIR"] = _resolve_store_home(
-        "CHECKPOINT_DIR", "avatar", "avatar/kimodo")
+    # ── Lib env-name shim (no process env) ──────────────────────────
+    # CHECKPOINT_DIR: the lib's only checkpoint convention — serve the
+    # avatar folder category's root (the lib appends the variant folder
+    # name, e.g. Kimodo-SOMA-RP-v1.1, itself).
+    # TEXT_ENCODER_MODE: the node input (default "local" skips the
+    # phantom API probe the vendor "auto" default wastes 5-10s on).
+    # Every other name delegates to the lib's own reader untouched.
+    if not getattr(_lm, "_estate_env_shim", False):
+        _lm._estate_orig_get_env = _lm.get_env_var
 
-    # LLM2Vec adapter paths: llm2vec_wrapper.py joins TEXT_ENCODERS_DIR
-    # with the Hydra-provided repo IDs
-    # ("McGill-NLP/LLM2Vec-Meta-Llama-3-8B-...") to resolve local paths.
-    # Without this, from_pretrained() tries HF Hub under
-    # HF_HUB_OFFLINE=1 and crashes with LocalEntryNotFoundError. The
-    # adapters ride the deployment env (no store category carries them).
-    _require_deployment_dir(
-        "TEXT_ENCODERS_DIR",
-        "the LLM2Vec adapter root (<org>/<repo> layout)")
+        def _estate_get_env(name, default=None):
+            if name == "CHECKPOINT_DIR":
+                return _folder_home("avatar", "avatar/kimodo")
+            if name == "TEXT_ENCODER_MODE":
+                return str(_ESTATE_KIMODO_CFG["text_encoder_mode"])
+            return _lm._estate_orig_get_env(name, default)
 
-    # HF caches — the deployment owns these (engine env / lanes.env);
-    # the pack no longer forces them. Unset = the library defaults
-    # stand. When the deployment names them, mirror to the
-    # huggingface_hub constants (env was read at import time), so an
-    # online deployment (HF_HUB_OFFLINE=0) is not sabotaged by the
-    # runtime constant (2026-08-13 fix).
-    _mirror_hf_cache("HF_HOME")
-    _mirror_hf_cache("HF_HUB_CACHE")
-    _mirror_hf_cache("HUGGINGFACE_CACHE_DIR")
+        _lm.get_env_var = _estate_get_env
+        _lm._estate_env_shim = True
 
-    # Offline mode (prevent network calls in air-gapped pods).
-    # setdefault — respects the deployment config. A container that sets
-    # HF_HUB_OFFLINE=0 to allow on-the-fly downloads by ComfyUI custom
-    # nodes (rembg U2Net, TRELLIS preprocessors, Comfy3D textures) must
-    # NOT be overridden by the node pack (2026-08-13 fix).
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    # ── LLM2Vec adapter homes (no process env) ──────────────────────
+    # llm2vec_wrapper.py joins its own TEXT_ENCODERS_DIR with the
+    # Hydra-provided repo IDs ("McGill-NLP/LLM2Vec-Meta-Llama-3-8B-...")
+    # to resolve local paths. Rewrite the preset's repo IDs to absolute
+    # folder-paths homes BEFORE instantiation: the wrapper's join leg
+    # never fires (it only fires when its own seat is set, which this
+    # pack never sets) and from_pretrained loads the local tree. The
+    # llm2vec category (endpoint extra_model_folders) carries the
+    # <org>/<repo> layout; without it from_pretrained would try HF Hub
+    # and crash with LocalEntryNotFoundError. The device pin rides the
+    # preset kwargs too (the wrapper's own device seat stays unset).
+    enc_root = _folder_home(
+        "llm2vec", "llm2vec/<org>/<repo> adapters "
+        "(McGill-NLP/LLM2Vec-Meta-Llama-3-8B-*)")
+    for _preset in _lm.TEXT_ENCODER_PRESETS.values():
+        _kw = _preset.get("kwargs", {})
+        for _key in ("base_model_name_or_path", "peft_model_name_or_path"):
+            _repo = str(_kw.get(_key, ""))
+            if _repo and not os.path.isabs(_repo):
+                _kw[_key] = os.path.join(enc_root, _repo)
+        _kw["device"] = text_encoder_device
 
-    # Text encoder: force local LLM2Vec (bf16). Vendor load_model() defaults
-    # to TEXT_ENCODER_MODE=auto which probes a text-encoder API service that
-    # doesn't exist in this pod, wastes 5-10s on a failed health check, then
-    # falls back to local anyway. "local" skips the probe.
-    # (Behavior flag, not a location — outside the §3.14 census.)
-    os.environ.setdefault("TEXT_ENCODER_MODE", "local")
-
-    try:
-        import huggingface_hub.constants as hf_const
-        # Mirror the resolved env so an online deployment (HF_HUB_OFFLINE=0)
-        # is not sabotaged by the runtime constant (the prior forced True
-        # blocked every huggingface_hub call inside the inference process,
-        # bypassing the gateway's download utility). 2026-08-13 fix.
-        hf_const.HF_HUB_OFFLINE = os.environ.get("HF_HUB_OFFLINE", "1") == "1"
-    except (ImportError, AttributeError):
-        pass
-
+    # ── Offline posture (node input, default True) ──────────────────
+    # The mistral tokenizer check (transformers' is_base_mistral /
+    # _patch_mistral_regex) phones home during
+    # AutoTokenizer.from_pretrained and dies on air-gapped pods. Our
+    # model is NOT Mistral, so the offline mock (empty tags →
+    # is_base_mistral False) loads. offline=False restores the lib's
+    # own model_info and leaves the hub constants to library defaults
+    # (an online lane's downloads ride the gateway utility, never this
+    # pack).
     try:
         import huggingface_hub
-        # Monkey-patch model_info so transformers' is_base_mistral() /
-        # _patch_mistral_regex doesn't hit the network on air-gapped pods.
-        # is_base_mistral calls model_info(model_id) during
-        # AutoTokenizer.from_pretrained() and accesses .tags to check for
-        # "base_model:.*mistralai". Our model is NOT Mistral, so we return
-        # a mock with empty tags -> is_base_mistral returns False -> loads.
+        import huggingface_hub.constants as hf_const
         from types import SimpleNamespace
 
-        def _offline_model_info(*args, **kwargs):
-            return SimpleNamespace(
-                tags=[],
-                id=args[0] if args else kwargs.get("repo_id", ""),
-                config={},
-                siblings=[],
-                sha="",
-                private=False,
-            )
+        if offline:
+            hf_const.HF_HUB_OFFLINE = True
 
-        huggingface_hub.model_info = _offline_model_info
+            def _offline_model_info(*args, **kwargs):
+                return SimpleNamespace(
+                    tags=[],
+                    id=args[0] if args else kwargs.get("repo_id", ""),
+                    config={},
+                    siblings=[],
+                    sha="",
+                    private=False,
+                )
+
+            if _orig_hf_model_info is None:
+                _orig_hf_model_info = huggingface_hub.model_info
+            huggingface_hub.model_info = _offline_model_info
+        else:
+            hf_const.HF_HUB_OFFLINE = False
+            if _orig_hf_model_info is not None:
+                huggingface_hub.model_info = _orig_hf_model_info
+                _orig_hf_model_info = None
     except ImportError:
         pass
 
@@ -463,6 +456,24 @@ class KimodoLoader:
                     "placeholder": "default model (leave empty for auto)",
                 }),
             },
+            "optional": {
+                # VENDOR RE-CURE (2026-11-01): the offline/device/mode
+                # switches ride node inputs with defaults, never env.
+                # "local" skips the phantom text-encoder API probe;
+                # offline=True keeps air-gapped pods off the network.
+                "text_encoder_device": (["cpu", "cuda"], {
+                    "default": "cpu",
+                    "tooltip": "LLM2Vec encoder device (cpu keeps VRAM free for the diffusion model)",
+                }),
+                "text_encoder_mode": (["local", "auto"], {
+                    "default": "local",
+                    "tooltip": "local builds the LLM2Vec encoder in-process; auto probes the vendor API service first",
+                }),
+                "offline": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "True blocks huggingface_hub network calls (air-gapped pods); False restores the library defaults",
+                }),
+            },
         }
 
     RETURN_TYPES = ("KIMODO_MODEL",)
@@ -470,10 +481,30 @@ class KimodoLoader:
     FUNCTION = "load"
     CATEGORY = "Melite/Kimodo"
 
-    def load(self, model_name: str):
+    def load(
+        self,
+        model_name: str,
+        text_encoder_device: str = "cpu",
+        text_encoder_mode: str = "local",
+        offline: bool = True,
+    ):
         import comfy.model_management as mm
         import comfy.model_patcher as mp
-        _apply_network_patches()
+        if text_encoder_mode not in ("local", "auto"):
+            raise RuntimeError(
+                "KimodoLoader: text_encoder_mode must be 'local' or "
+                f"'auto', got {text_encoder_mode!r} — fix the node input."
+            )
+        if text_encoder_device not in ("cpu", "cuda"):
+            raise RuntimeError(
+                "KimodoLoader: text_encoder_device must be 'cpu' or "
+                f"'cuda', got {text_encoder_device!r} — fix the node input."
+            )
+        _apply_network_patches(
+            offline=offline,
+            text_encoder_mode=text_encoder_mode,
+            text_encoder_device=text_encoder_device,
+        )
         from kimodo import load_model
 
         # ── Free VRAM before Hydra-based loading ──────────────────────────
@@ -491,19 +522,21 @@ class KimodoLoader:
         mm.unload_all_models()
         mm.soft_empty_cache()
 
-        # NO SILENT DEFAULT (estate §3.14): the model name rides the
+        # NO SILENT DEFAULT (VENDOR RE-CURE): the model name rides the
         # graph from the estate composer (DECL lane_inputs model_path —
-        # Kimodo-SOMA-RP-v1.1). A hand-built graph that leaves it empty
-        # refuses here, naming the seat, instead of borrowing an env
-        # fallback the estate cannot see.
+        # Kimodo-SOMA-RP-v1.1), resolved under the avatar folder
+        # category. A hand-built graph that leaves it empty refuses
+        # here, naming the DECL seat + folder category — never a
+        # unit/env seat (the pack reads no process env at all).
         variant = model_name.strip()
         if not variant:
             raise RuntimeError(
                 "KimodoLoader: model_name is empty — pass the model "
                 "directory name (the estate DECL's lane_inputs "
-                "model_path, e.g. Kimodo-SOMA-RP-v1.1; the composer "
-                "always passes it). KIMODO_MODEL is not read: model "
-                "identity rides the graph, never process env."
+                "model_path, e.g. Kimodo-SOMA-RP-v1.1, resolved as "
+                "the avatar folder category's variant subfolder; the "
+                "composer always passes it). Model identity rides the "
+                "graph, never process env."
             )
         log.info("KimodoLoader: loading %s on CPU (offload device)", variant)
         t0 = time.perf_counter()
@@ -511,9 +544,12 @@ class KimodoLoader:
         # Encoder reuse: hand the cached CPU-pinned text encoder to
         # load_model so it skips selection/instantiation entirely (see the
         # module-level comment for the marathon7 story). None on first load
-        # → kimodo builds it internally and we steal it below.
+        # → kimodo builds it internally and we steal it below. Keyed by
+        # variant + device + mode so a changed node input builds (and
+        # caches) its own instance instead of reusing a stale one.
+        cache_key = (variant, text_encoder_device, text_encoder_mode)
         with _TEXT_ENCODER_LOCK:
-            encoder = _TEXT_ENCODER_CACHE.get(variant)
+            encoder = _TEXT_ENCODER_CACHE.get(cache_key)
 
         # Rule 1: instantiate on the offload device. NO .to(cuda).
         raw_model, resolved = load_model(
@@ -525,19 +561,20 @@ class KimodoLoader:
         )
 
         if encoder is None:
-            # First load: kimodo instantiated the encoder itself (pinned to
-            # CPU by TEXT_ENCODER_DEVICE above). Cache it so every later
-            # load passes it back — zero instantiation, zero checkpoint
-            # load, zero second 21.7GB resident copy.
+            # First load: kimodo instantiated the encoder itself (device
+            # pinned by the text_encoder_device node input via the
+            # preset rewrite above). Cache it so every later load passes
+            # it back — zero instantiation, zero checkpoint load, zero
+            # second 21.7GB resident copy.
             with _TEXT_ENCODER_LOCK:
-                if variant not in _TEXT_ENCODER_CACHE:
+                if cache_key not in _TEXT_ENCODER_CACHE:
                     internal = getattr(raw_model, "text_encoder", None)
                     if internal is not None:
-                        _TEXT_ENCODER_CACHE[variant] = internal
+                        _TEXT_ENCODER_CACHE[cache_key] = internal
                         log.info(
                             "KimodoLoader: cached %s text encoder "
-                            "(CPU-pinned, ~21.7GB) — later loads reuse it",
-                            variant,
+                            "(device=%s, ~21.7GB) — later loads reuse it",
+                            variant, text_encoder_device,
                         )
 
         raw_model.eval()

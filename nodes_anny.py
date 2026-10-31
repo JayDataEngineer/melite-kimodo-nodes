@@ -22,11 +22,13 @@ with the exact remediation.
 
 Checkpoints:
   multihmr2.pt — auto-downloaded by upstream (wget, NAVER non-commercial
-    license) when the resolved path does not exist yet. Resolution chain:
-    node input > MULTIHMR2_CKPT env > <comfy models dir>/multihmr2/
+    license) when the resolved path does not exist yet. Resolution: the
+    `checkpoint` node input, else <comfy models dir>/multihmr2/
     multihmr2.pt. The file stem MUST be "multihmr2" (upstream asserts).
-  anny-fit — its own checkpoints/ inside ANNYFIT_SRC (download_checkpoints.sh
-    + the INSTALL.md manual list); failures surface upstream's own error.
+  anny-fit — its own checkpoints/ inside the `annyfit_src` node input
+    (download_checkpoints.sh + the INSTALL.md manual list); failures
+    surface upstream's own error. No process env anywhere in this pack
+    for locations or behavior (subprocess inheritance excepted).
 """
 from __future__ import annotations
 
@@ -74,10 +76,14 @@ except ImportError:
 
 _ANNY_TAG = "[melite-kimodo-nodes/anny]"
 
-_MULTIHMR2_CKPT_ENV = "MULTIHMR2_CKPT"
-_ANNYFIT_SRC_ENV = "ANNYFIT_SRC"
-_ANNYFIT_PY_ENV = "ANNYFIT_PYTHON"
-_ANNYFIT_SRC_DEFAULT = "/opt/anny-fit"
+# VENDOR RE-CURE (2026-11-01) — COMFYUI EXTENSION NEVER USE ENV
+# VARIABLES. The seat names below are retired: the checkpoint rides
+# the `checkpoint` node input, the checkout rides `annyfit_src`, the
+# interpreter rides `annyfit_python`. They survive as _RETIRED names
+# so the loud refusals can name what NOT to set.
+_MULTIHMR2_CKPT_RETIRED = "MULTIHMR2_CKPT"
+_ANNYFIT_SRC_RETIRED = "ANNYFIT_SRC"
+_ANNYFIT_PY_RETIRED = "ANNYFIT_PYTHON"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -195,20 +201,18 @@ _SESSION_CACHE: dict = {}
 
 
 def _resolve_checkpoint(explicit: str) -> str:
-    """Resolution chain: node input > MULTIHMR2_CKPT > models dir.
+    """Resolution: node input, else the ComfyUI models dir candidate.
 
-    The FIRST EXISTING candidate wins; if none exists, the first
-    candidate is returned and upstream auto-downloads to it (wget,
-    NAVER non-commercial license). Loud on a wrong stem — upstream
-    asserts ckpt_path.stem == "multihmr2", so we refuse it HERE with
-    a remediation instead of an upstream stack trace.
+    VENDOR RE-CURE — no env leg. The FIRST EXISTING candidate wins; if
+    none exists, the first candidate is returned and upstream
+    auto-downloads to it (wget, NAVER non-commercial license). Loud on
+    a wrong stem — upstream asserts ckpt_path.stem == "multihmr2", so we
+    refuse it HERE with a remediation instead of an upstream stack
+    trace.
     """
     cands: list = []
     if explicit:
-        cands.append(("node input", explicit))
-    env = os.environ.get(_MULTIHMR2_CKPT_ENV, "").strip()
-    if env:
-        cands.append((_MULTIHMR2_CKPT_ENV, env))
+        cands.append(("node input 'checkpoint'", explicit))
     if folder_paths is not None:
         cands.append((
             "comfy models dir",
@@ -217,8 +221,9 @@ def _resolve_checkpoint(explicit: str) -> str:
     if not cands:
         raise RuntimeError(
             "MultiHMR2ImageToAnny: no checkpoint source — pass the "
-            "'checkpoint' input, set MULTIHMR2_CKPT, or run inside "
-            "ComfyUI (models dir candidate)"
+            "'checkpoint' node input (MULTIHMR2_CKPT env is retired: "
+            "the pack never reads process env). Run inside ComfyUI "
+            "for the models-dir candidate."
         )
     for source, path in cands:
         if Path(path).stem != "multihmr2":
@@ -309,8 +314,8 @@ class MultiHMR2ImageToAnny:
                 }),
                 "checkpoint": ("STRING", {
                     "default": "", "multiline": False, "forceInput": True,
-                    "tooltip": "multihmr2.pt path — defaults to "
-                               "MULTIHMR2_CKPT env > models dir",
+                    "tooltip": "multihmr2.pt path — defaults to the "
+                               "ComfyUI models dir candidate",
                 }),
             },
         }
@@ -618,8 +623,23 @@ class AnnyGroundBody:
 # ════════════════════════════════════════════════════════════════════════════
 # Engine 2: Anny-Fit optimization (out-of-process subprocess)
 # ════════════════════════════════════════════════════════════════════════════
-def _annyfit_root() -> Path:
-    src = Path(os.environ.get(_ANNYFIT_SRC_ENV, _ANNYFIT_SRC_DEFAULT))
+def _annyfit_root(explicit: str = "") -> Path:
+    """The anny-fit side checkout — the `annyfit_src` node input ONLY.
+
+    VENDOR RE-CURE: no env leg, no /opt default. An empty input refuses
+    loud naming the input seat (the checkout is code, not weights — no
+    folder category carries it).
+    """
+    src = Path((explicit or "").strip())
+    if not explicit.strip():
+        raise RuntimeError(
+            "AnnyFitOptimize: no anny-fit checkout — wire the "
+            "'annyfit_src' node input at the checkout root (git clone "
+            "--recurse-submodules https://github.com/naver/anny-fit, "
+            "then scripts/install.sh + scripts/download_checkpoints.sh "
+            "+ the INSTALL.md manual checkpoints). "
+            "ANNYFIT_SRC env is retired: the pack never reads process env."
+        )
     expected = [src / "preprocess" / "build_test_dataset.py",
                 src / "annyfit" / "optimize.py"]
     missing = [str(p) for p in expected if not p.is_file()]
@@ -632,28 +652,35 @@ def _annyfit_root() -> Path:
             "bash scripts/download_checkpoints.sh\n"
             "  + the INSTALL.md manual checkpoints "
             "(ViTPose/CameraHMR/SMPL)\n"
-            "Missing: " + ", ".join(missing) + ".\n"
-            "or point " + _ANNYFIT_SRC_ENV + " at an existing checkout."
+            "Missing: " + ", ".join(missing) + "."
         )
     return src
 
 
-def _annyfit_python(src: Path) -> str:
-    py = os.environ.get(_ANNYFIT_PY_ENV, "").strip() or str(
-        src / ".venv" / "bin" / "python"
-    )
+def _annyfit_python(src: Path, explicit: str = "") -> str:
+    """The checkout's venv python, or the `annyfit_python` node input."""
+    py = (explicit or "").strip() or str(src / ".venv" / "bin" / "python")
     if not os.path.isfile(py):
         raise RuntimeError(
             f"anny-fit interpreter not found at {py}. Create the env "
-            f"(scripts/install.sh inside the checkout) or set {_ANNYFIT_PY_ENV} "
-            "to the venv python that has anny-fit's requirements installed."
+            f"(scripts/install.sh inside the checkout) or wire the "
+            f"'annyfit_python' node input at a venv python that has "
+            f"anny-fit's requirements installed. ANNYFIT_PYTHON env is "
+            f"retired: the pack never reads process env."
         )
     return py
 
 
 def _annyfit_env(src: Path) -> dict:
     """setup.sh's contract: PYTHONPATH over the checkout + submodules,
-    EGL rendering (osmesa override honored from the outside)."""
+    EGL rendering (osmesa override honored from the outside).
+
+    WALL NOTE (rostered, not a seat): ``dict(os.environ)`` below is
+    transparent subprocess inheritance — the child keeps the parent's
+    environment and these extras are layered on. It reads no seat and
+    configures nothing; every location/behavior seat in this pack is a
+    node input. Pinned exactly by the vendor-estate-locations wall.
+    """
     env = dict(os.environ)
     py_path = os.pathsep.join(str(p) for p in (
         src,
@@ -791,6 +818,18 @@ class AnnyFitOptimize:
                     "tooltip": "Init checkpoint name inside the checkout's "
                                "checkpoints/ dir",
                 }),
+                # VENDOR RE-CURE: checkout + interpreter seats ride node
+                # inputs, never env (ANNYFIT_SRC/ANNYFIT_PYTHON retired).
+                "annyfit_src": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "anny-fit checkout root (required — "
+                               "refuses loud naming this input when empty)",
+                }),
+                "annyfit_python": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "anny-fit venv python (defaults to "
+                               "<annyfit_src>/.venv/bin/python)",
+                }),
                 "skip_camera": ("BOOLEAN", {
                     "default": False, "tooltip": "--no_camera",
                 }),
@@ -816,6 +855,8 @@ class AnnyFitOptimize:
         optimize_timeout_s: int,
         filename_prefix: str,
         multihmr_model: str = "multiHMR_672_L_anny",
+        annyfit_src: str = "",
+        annyfit_python: str = "",
         skip_camera: bool = False,
         skip_densekp: bool = False,
     ):
@@ -824,8 +865,8 @@ class AnnyFitOptimize:
                 "AnnyFitOptimize: image_path is required — a file, a folder "
                 "of images, or a data_root with images/"
             )
-        src = _annyfit_root()
-        py = _annyfit_python(src)
+        src = _annyfit_root(annyfit_src)
+        py = _annyfit_python(src, annyfit_python)
         env = _annyfit_env(src)
         run_dir = _next_run_dir(filename_prefix)
         n_imgs = _stage_images(image_path, run_dir)
@@ -882,7 +923,11 @@ class AnnyFitOptimize:
 # ════════════════════════════════════════════════════════════════════════════
 # Registration
 # ════════════════════════════════════════════════════════════════════════════
-_ESTIMATOR_ROOT_ENV = "ANNY_ESTIMATOR_ROOT"
+# VENDOR RE-CURE (2026-11-01) — COMFYUI EXTENSION NEVER USE ENV
+# VARIABLES. ANNY_ESTIMATOR_ROOT is retired as a seat: the runtime
+# root rides the `estimator_root` node input. The name survives only
+# so the loud refusal can tell an operator what NOT to set.
+_ESTIMATOR_ROOT_RETIRED = "ANNY_ESTIMATOR_ROOT"
 _ESTIMATOR_ROOT_REL = ("data", "runtime", "anny-estimator")
 # THE ROOT SEARCH. The managed boot's convention put ComfyUI's output
 # dir at <ws>/data/temp, so parents[1] was the workspace — a BYO
@@ -911,15 +956,32 @@ def _default_estimator_root() -> str:
 _ESTIMATOR_ROOT_DEFAULT = _default_estimator_root()
 
 
-def _estimator_root() -> Path:
+def _estimator_root(explicit: str = "") -> Path:
     """The provisioned estimator-chain runtime (venv + SOMA-X + worker).
 
     data/runtime/anny-estimator/ is materialized by the estate
     provisioner (torch cu130 — the system nvcc 13.x cannot build
     against the serving venv's cu128 stack, so the chain rides its
     own venv as a subprocess, the AnnyFitOptimize pattern).
+
+    VENDOR RE-CURE: the `estimator_root` node input ONLY — no env
+    leg. An empty input falls back to the checkout-relative
+    provisioned default; when even that is absent it refuses loud
+    naming the input seat.
     """
-    src = Path(os.environ.get(_ESTIMATOR_ROOT_ENV, _ESTIMATOR_ROOT_DEFAULT))
+    seat = (explicit or "").strip()
+    if not seat:
+        if not _ESTIMATOR_ROOT_DEFAULT:
+            raise RuntimeError(
+                "Sam3dBodyImageToAnny: no estimator runtime — wire the "
+                "'estimator_root' node input at the provisioned runtime "
+                "root (estimator_chain.py + .venv + SOMA-X/tools/mhr2soma.py; "
+                "provision it: pnpm run provision -- estimator). "
+                "ANNY_ESTIMATOR_ROOT env is retired: the pack never reads "
+                "process env."
+            )
+        seat = _ESTIMATOR_ROOT_DEFAULT
+    src = Path(seat)
     expected = [src / "estimator_chain.py",
                 src / ".venv" / "bin" / "python",
                 src / "SOMA-X" / "tools" / "mhr2soma.py"]
@@ -930,8 +992,8 @@ def _estimator_root() -> Path:
             "Provision it: pnpm run provision -- estimator "
             "(SAM 3D Body venv + SOMA-X checkout — see "
             "dev_docs/design/estimator-chain.md). Missing: "
-            + ", ".join(missing) + ". Or point " + _ESTIMATOR_ROOT_ENV
-            + " at an existing runtime."
+            + ", ".join(missing) + ". Or wire 'estimator_root' at an "
+            + "existing runtime."
         )
     return src
 
@@ -975,6 +1037,14 @@ class Sam3dBodyImageToAnny:
                     "default": 0, "min": 0, "max": 32,
                     "tooltip": "Which detected person (detection order)",
                 }),
+                # VENDOR RE-CURE: runtime seat rides a node input,
+                # never env (ANNY_ESTIMATOR_ROOT retired).
+                "estimator_root": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "anny-estimator runtime root (defaults to "
+                               "the provisioned data/runtime/anny-estimator; "
+                               "refuses loud naming this input when absent)",
+                }),
             },
         }
 
@@ -985,8 +1055,9 @@ class Sam3dBodyImageToAnny:
     CATEGORY = "Melite/Anny"
 
     @staticmethod
-    def estimate(image, image_path="", person_index=0):
-        root = _estimator_root()
+    def estimate(image, image_path="", person_index=0,
+                 estimator_root=""):
+        root = _estimator_root(estimator_root)
         run_dir = _next_run_dir("estimator_anny")
 
         src = (image_path or "").strip()
@@ -1066,8 +1137,9 @@ class AnnyParamsToGlb:
     pack. No subprocess, no runtime root, no env var, no path walk:
     an npm consumer installs the pack and the node works. The old
     out-of-process spawn (a separate python-3.11 venv with a
-    hardcoded LD_LIBRARY_PATH, hunted via ANNY_ESTIMATOR_ROOT and
-    ancestor walks) ran a function this venv already had — deleted.
+    hardcoded LD_LIBRARY_PATH, hunted via the retired
+    ANNY_ESTIMATOR_ROOT seat and ancestor walks) ran a function this
+    venv already had — deleted.
 
     params_json is the canonical node dialect (CharacterPreset.
     canonical_json): authored {11 phenotype + named morphs} or
