@@ -271,7 +271,7 @@ _network_patches_applied = False
 def _resolve_store_home(seat: str, category: str, decl_home: str) -> str:
     """Resolve a model home: deployment env, then ComfyUI folders.
 
-    Estate §3.14 (2026-11-01) — the pack holds no /mnt/data literals.
+    Estate §3.14 (2026-11-01) — the pack holds no absolute model-path literals.
     Order: the deployment env var FIRST so an explicit machine statement
     always wins, then ComfyUI's folder_paths category (the endpoint
     statement's extra_model_folders key, seated by the provisioner).
