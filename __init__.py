@@ -55,7 +55,15 @@ else:
 # grammar the engine surfaces at boot.
 from .env_assert import assert_transformers_bound  # noqa: E402 — before the nodes import
 
-assert_transformers_bound()
+if _KIMODO_SOURCE is not None:
+    # The assert rides the ARMED lane only. A bare clone with kimodo
+    # unresolvable soft-registers under the never-raise law above (the
+    # failure lands at KimodoLoader.load with its breadcrumb — a raise
+    # at import would drop the whole pack from ComfyUI). The kwarg
+    # drift kills MID-RUN exactly when the lane CAN arm: kimodo
+    # importable but transformers re-pinned out of bound. That shape
+    # refuses at boot, named, before the nodes import.
+    assert_transformers_bound()
 
 from .nodes import (  # noqa: E402 — after the kimodo source bootstrap above
     NODE_CLASS_MAPPINGS as _KIMODO_MAPPINGS,
