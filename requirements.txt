@@ -7,10 +7,21 @@
 # The kimodo package itself ships as the pip leg at the bottom of this
 # file (audit 019 C6 deleted the dev-box sys.path bootstrap — the pip
 # leg is the ONE install door on dev boxes and cold Manager clones
-# alike). Everything else kimodo needs (torch, transformers, peft,
-# omegaconf, einops, tqdm, numpy, scipy, huggingface_hub) already
-# ships in the base env; hydra-core is the one gap that broke the
-# import chain with "No module named 'kimodo'" mid-run.
+# alike). Everything else kimodo needs (torch, peft, omegaconf,
+# einops, tqdm, numpy, scipy) already ships in the base env;
+# hydra-core is the one gap that broke the import chain with "No
+# module named 'kimodo'" mid-run.
+#
+# THE TRANSFORMERS BOUND (F3 D3-06, 2026-11-15): "ships in the base
+# env" was the exact trap that killed the motion lane — the shared
+# venv's transformers drifted (create_causal_mask() got an unexpected
+# keyword argument 'input_embeds') and the pack died mid-run. The
+# tested bound is now DECLARED at this install door (the estate venv
+# standard pin, the same grammar melite-audio-nodes owns) and
+# ASSERTED at boot (env_assert.py — a drifted env refuses the pack
+# import with the named remedy, never a dead lane on press).
+transformers==5.20.2
+huggingface_hub==1.33.0
 hydra-core>=1.3
 # Anny engines (were the anny-estimator pack's rail — same pin the
 # owning 3d lane declares in its nodes.yaml `pip:`; ComfyUI-Manager

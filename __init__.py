@@ -46,6 +46,17 @@ except ImportError as _e:
 else:
     log.info("[melite-kimodo] kimodo source: %s", _KIMODO_SOURCE)
 
+# THE BOOT ENV ASSERT (F3 D3-06, the audio pack's sibling law): the
+# kwarg-drift trap stays — transformers was unpinned ("already ships
+# in the base env"), the venv is shared and last installer wins, so
+# the next upstream rename would land silently and kill the motion
+# lane MID-RUN again (the input_embeds burn, 2026-11-13). The tested
+# bound is refused HERE, before the nodes import, in the refusal
+# grammar the engine surfaces at boot.
+from .env_assert import assert_transformers_bound  # noqa: E402 — before the nodes import
+
+assert_transformers_bound()
+
 from .nodes import (  # noqa: E402 — after the kimodo source bootstrap above
     NODE_CLASS_MAPPINGS as _KIMODO_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _KIMODO_DISPLAY,
