@@ -135,6 +135,36 @@ def _unwrap_uv(mesh) -> "tuple":
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# The NORMAL seat (2026-11-26, the position-only bake's second half): the
+# UV seat above gave the body a texture seat, but every saver still wrote
+# POSITION alone — trimesh 5's exporter emits NORMAL only for a mesh that
+# states its normals, so a body+faces Trimesh exported to GLB carries no
+# NORMAL attribute at all (measured: attributes ['POSITION']). A renderer
+# shades such a mesh with zero/derived-per-face lighting — flat black or
+# hard facets — and the downstream rig/fit lanes read a normal-less
+# primitive as unshadeable. The normals are the MESH's own (trimesh's
+# area-weighted vertex normals), computed once at the export, and both
+# anny savers write through this one door.
+# ════════════════════════════════════════════════════════════════════════════
+def _export_glb_with_normals(path, verts, faces, visual=None) -> None:
+    """Write the body GLB with POSITION + per-vertex NORMAL (+ TEXCOORD_0
+    when ``visual`` carries UVs).
+
+    trimesh's GLB exporter writes normal data only when the export asks
+    for it; without this door the bake's own mesh exported a POSITION-only
+    primitive (defect F-ANNY-NORMALS, 2026-11-26: the preset bake shaded
+    flat black in three.js). The normals are the mesh's geometry normals —
+    never a constant, never inferred downstream.
+    """
+    import trimesh
+    from trimesh.exchange import gltf
+    mesh = trimesh.Trimesh(
+        vertices=verts, faces=faces, process=False, visual=visual)
+    with open(str(path), "wb") as f:
+        f.write(gltf.export_glb(mesh, include_normals=True))
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Shared output-directory convention (autoremesher pattern: counter under
 # the ComfyUI output dir, derived from filename_prefix)
 # ════════════════════════════════════════════════════════════════════════════
@@ -608,10 +638,9 @@ class AnnyGroundBody:
                                    process=False,
                                    visual=mesh.visual)
         uv_verts, uv_faces, uv = _unwrap_uv(grounded)
-        trimesh.Trimesh(
-            vertices=uv_verts, faces=uv_faces, process=False,
-            visual=trimesh.visual.TextureVisuals(uv=uv),
-        ).export(str(out))
+        _export_glb_with_normals(
+            out, uv_verts, uv_faces,
+            trimesh.visual.TextureVisuals(uv=uv))
         logger.info("[AnnyGroundBody] %s -> %s (extent %s)",
                     p, out, extent.round(3))
         return {
@@ -1278,8 +1307,7 @@ class AnnyParamsToGlb:
         run_dir = _next_run_dir("preset_bake")
         out = run_dir / "preset_body.glb"
         run_dir.mkdir(parents=True, exist_ok=True)
-        trimesh.Trimesh(vertices=verts, faces=faces,
-                        process=False).export(str(out))
+        _export_glb_with_normals(out, verts, faces)
         logger.info("[preset-bake] PROGRESS glb %s extent %s",
                     out.name, extent)
         return {
